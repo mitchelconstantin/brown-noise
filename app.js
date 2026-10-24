@@ -1,7 +1,6 @@
 /**
  * Offline-First Brown Noise PWA
- * Zero-dependency, gapless audio synthesis and background playback engine
- * with psychoacoustic phone speaker optimization.
+ * Multi-profile organic noise synthesis and background playback engine.
  */
 
 (function () {
@@ -9,19 +8,42 @@
 
   // --- Constants & Audio Configuration ---
   const SAMPLE_RATE = 44100;
-  const BUFFER_DURATION_SEC = 40;  // 40-second high-fidelity seamless buffer
+  const BUFFER_DURATION_SEC = 30;  // 30-second high-fidelity seamless buffer
   const WARMUP_SEC = 2.0;          // 2s warmup to settle filters before buffer start
-  const CROSSFADE_SEC = 4.0;       // 4s equal-power crossfade for seamless looping
-  const MIN_CUTOFF_HZ = 90;        // Deep Rumble: 90 Hz sub-bass (audible on phones)
-  const MAX_CUTOFF_HZ = 520;       // Mellow Brown: 520 Hz maximum (no shrill frequencies)
-  const FADE_IN_SEC = 1.5;         // 1500ms smooth fade in
-  const FADE_OUT_SEC = 1.2;        // 1200ms smooth fade out
+  const CROSSFADE_SEC = 3.5;       // 3.5s equal-power crossfade for seamless looping
+  const MIN_CUTOFF_HZ = 120;       // Deep Rumble lower cutoff
+  const MAX_CUTOFF_HZ = 750;       // Mellow Brown upper cutoff (warm, zero shrill highs)
+  const FADE_IN_SEC = 1.2;         // 1200ms smooth fade in
+  const FADE_OUT_SEC = 1.0;        // 1000ms smooth fade out
 
   const STORAGE_KEYS = {
     WARMTH: 'brown_noise_warmth',
     VOLUME: 'brown_noise_volume',
     TIMER: 'brown_noise_timer',
-    BOOST: 'brown_noise_speaker_boost'
+    PROFILE: 'brown_noise_profile'
+  };
+
+  const PROFILES = {
+    cabin: {
+      name: 'Airplane Cabin',
+      desc: 'Deep cruising jet cabin airflow. Loud & soothing on phone speakers.'
+    },
+    waterfall: {
+      name: 'Dark Waterfall',
+      desc: 'Dense, full-bodied roaring torrent. Maximum natural volume.'
+    },
+    downpour: {
+      name: 'Warm Downpour',
+      desc: 'Continuous gentle rain on a roof. Relaxing and mellow.'
+    },
+    ocean: {
+      name: 'Ocean Surf',
+      desc: 'Deep rolling ocean waves. Heavy, calming low-mid body.'
+    },
+    classic: {
+      name: 'Pure Sub-Rumble',
+      desc: 'Classic -6 dB/octave brown noise for deep sub-bass lovers.'
+    }
   };
 
   // --- DOM Elements ---
@@ -30,40 +52,39 @@
   const iconStop = document.getElementById('iconStop');
   const visualizerContainer = document.getElementById('visualizerContainer');
   const playbackStatus = document.getElementById('playbackStatus');
+  const profileChips = document.querySelectorAll('.profile-chip');
+  const profileValue = document.getElementById('profileValue');
   const warmthSlider = document.getElementById('warmthSlider');
   const warmthValue = document.getElementById('warmthValue');
   const volumeSlider = document.getElementById('volumeSlider');
   const volumeValue = document.getElementById('volumeValue');
-  const boostBtn = document.getElementById('boostBtn');
-  const boostStatus = document.getElementById('boostStatus');
   const timerCountdown = document.getElementById('timerCountdown');
   const timerChips = document.querySelectorAll('.timer-chip');
   const offlineBadge = document.getElementById('offlineBadge');
 
   // --- App State ---
   let isPlaying = false;
+  let activeProfileKey = localStorage.getItem(STORAGE_KEYS.PROFILE) || 'cabin';
   let warmth = parseInt(localStorage.getItem(STORAGE_KEYS.WARMTH) || '50', 10);
   let volume = parseInt(localStorage.getItem(STORAGE_KEYS.VOLUME) || '85', 10);
   let timerMinutes = parseInt(localStorage.getItem(STORAGE_KEYS.TIMER) || '0', 10);
-  // Default speaker boost ON for phone loudness
-  let speakerBoost = localStorage.getItem(STORAGE_KEYS.BOOST) !== 'false';
 
   let sleepTimerInterval = null;
   let sleepTimerEndTime = null;
 
+  // Cache for synthesized AudioBuffers so switching is instant
+  const bufferCache = new Map();
+
   // --- Audio Engine Components ---
   let audioCtx = null;
-  let bufferSourceNode = null;
+  let currentSourceNode = null;
   let filterNode = null;
-  let boostFilterNode = null;
-  let compressorNode = null;
   let gainNode = null;
   let streamAudioEl = null;
-  let sharedAudioBuffer = null;
 
   /**
-   * Maps 0-100 warmth slider to cutoff frequency (90 Hz to 520 Hz).
-   * Capped at Mellow Brown with no shrill high frequencies.
+   * Maps 0-100 warmth slider to cutoff frequency (120 Hz to 750 Hz).
+   * Capped to avoid any shrill frequencies.
    */
   function warmthToCutoff(val) {
     const clamped = Math.max(0, Math.min(100, val));
@@ -78,97 +99,145 @@
 
   /**
    * Procedural Audio Synthesis:
-   * Generates a 40-second stereo brown noise buffer with:
-   * 1. 2s warmup to stabilize leaky integration & DC blocker.
-   * 2. 40 Hz high-pass filter: eliminates inaudible subsonic rumble that wastes
-   *    phone speaker power and amplifier excursion.
-   * 3. Psychoacoustic harmonic bass generator: injects warm 2nd & 3rd harmonics
-   *    into the 180 Hz - 450 Hz band, making deep bass clearly audible on phone speakers.
-   * 4. 4s equal-power tail crossfade for zero-seam, completely gapless looping.
-   * 5. RMS loudness normalization (~ -9.5 dBFS) + soft saturation.
+   * Generates organic multi-pole noise textures without synthetic distortion.
+   * Profiles like Cabin, Waterfall, and Downpour possess natural acoustic energy
+   * in the 250 Hz - 750 Hz zone where smartphone speakers naturally resonate.
    */
-  function synthesizeBrownNoiseBuffer(targetCtx) {
+  function synthesizeProfileBuffer(profileKey, targetCtx) {
+    if (bufferCache.has(profileKey)) {
+      return bufferCache.get(profileKey);
+    }
+
     const warmupSamples = Math.floor(SAMPLE_RATE * WARMUP_SEC);
     const nSamples = Math.floor(SAMPLE_RATE * BUFFER_DURATION_SEC);
     const crossfadeSamples = Math.floor(SAMPLE_RATE * CROSSFADE_SEC);
     const totalGen = warmupSamples + nSamples + crossfadeSamples;
 
-    const rawL = new Float32Array(totalGen);
-    const rawR = new Float32Array(totalGen);
+    const left = new Float32Array(totalGen);
+    const right = new Float32Array(totalGen);
 
-    // 1. Brown noise leaky integration
-    let lastL = 0;
-    let lastR = 0;
+    let l0 = 0, l1 = 0, l2 = 0;
+    let r0 = 0, r1 = 0, r2 = 0;
+
     for (let i = 0; i < totalGen; i++) {
-      lastL = (lastL + 0.02 * (Math.random() * 2 - 1)) / 1.02;
-      lastR = (lastR + 0.02 * (Math.random() * 2 - 1)) / 1.02;
-      rawL[i] = lastL;
-      rawR[i] = lastR;
+      const wL = Math.random() * 2 - 1;
+      const wR = Math.random() * 2 - 1;
+
+      let sL = 0;
+      let sR = 0;
+
+      if (profileKey === 'cabin') {
+        // Airplane Cabin: Multi-pole acoustic airflow (-4.2 dB/oct slope)
+        // Naturally very loud and soothing on smartphone speakers without harshness
+        l0 = 0.992 * l0 + wL * 0.052;
+        l1 = 0.965 * l1 + wL * 0.038;
+        l2 = 0.880 * l2 + wL * 0.022;
+        sL = l0 + l1 + l2;
+
+        r0 = 0.992 * r0 + wR * 0.052;
+        r1 = 0.965 * r1 + wR * 0.038;
+        r2 = 0.880 * r2 + wR * 0.022;
+        sR = r0 + r1 + r2;
+      } else if (profileKey === 'waterfall') {
+        // Dark Waterfall: Dense, full-bodied roaring torrent (-4.6 dB/oct slope)
+        l0 = 0.997 * l0 + wL * 0.058;
+        l1 = 0.960 * l1 + wL * 0.034;
+        l2 = 0.820 * l2 + wL * 0.018;
+        sL = l0 + l1 + l2;
+
+        r0 = 0.997 * r0 + wR * 0.058;
+        r1 = 0.960 * r1 + wR * 0.034;
+        r2 = 0.820 * r2 + wR * 0.018;
+        sR = r0 + r1 + r2;
+      } else if (profileKey === 'downpour') {
+        // Warm Downpour: Gentle heavy rain on a roof (280 Hz - 700 Hz warmth)
+        l0 = 0.985 * l0 + wL * 0.046;
+        l1 = 0.940 * l1 + wL * 0.038;
+        l2 = 0.780 * l2 + wL * 0.026;
+        sL = l0 + l1 + l2;
+
+        r0 = 0.985 * r0 + wR * 0.046;
+        r1 = 0.940 * r1 + wR * 0.038;
+        r2 = 0.780 * r2 + wR * 0.026;
+        sR = r0 + r1 + r2;
+      } else if (profileKey === 'ocean') {
+        // Deep Ocean Surf: Rolling low-mid waves (180 Hz - 500 Hz)
+        l0 = 0.998 * l0 + wL * 0.045;
+        l1 = 0.975 * l1 + wL * 0.028;
+        l2 = 0.910 * l2 + wL * 0.015;
+        sL = l0 + l1 + l2;
+
+        r0 = 0.998 * r0 + wR * 0.045;
+        r1 = 0.975 * r1 + wR * 0.028;
+        r2 = 0.910 * r2 + wR * 0.015;
+        sR = r0 + r1 + r2;
+      } else {
+        // Pure Sub-Rumble: Classic brown noise (-6 dB/octave leaky integration)
+        l0 = (l0 + 0.025 * wL) / 1.02;
+        sL = l0;
+        r0 = (r0 + 0.025 * wR) / 1.02;
+        sR = r0;
+      }
+
+      left[i] = sL;
+      right[i] = sR;
     }
 
-    // 2. High-pass filter at 40 Hz to remove inaudible sub-bass power drain
+    // 1. High-pass DC-blocker (25 Hz)
     const dt = 1 / SAMPLE_RATE;
-    const rc = 1 / (2 * Math.PI * 40);
+    const rc = 1 / (2 * Math.PI * 25);
     const alphaHP = rc / (rc + dt);
 
     let prevXL = 0, prevYL = 0;
     let prevXR = 0, prevYR = 0;
     for (let i = 0; i < totalGen; i++) {
-      const yL = alphaHP * (prevYL + rawL[i] - prevXL);
-      prevXL = rawL[i];
+      const yL = alphaHP * (prevYL + left[i] - prevXL);
+      prevXL = left[i];
       prevYL = yL;
-      rawL[i] = yL;
+      left[i] = yL;
 
-      const yR = alphaHP * (prevYR + rawR[i] - prevXR);
-      prevXR = rawR[i];
+      const yR = alphaHP * (prevYR + right[i] - prevXR);
+      prevXR = right[i];
       prevYR = yR;
-      rawR[i] = yR;
+      right[i] = yR;
     }
 
-    // 3. Extract steady-state portion
-    const leftChannel = new Float32Array(nSamples);
-    const rightChannel = new Float32Array(nSamples);
+    // 2. Extract steady-state window (after 2s warmup)
+    const outL = new Float32Array(nSamples);
+    const outR = new Float32Array(nSamples);
     for (let i = 0; i < nSamples; i++) {
-      leftChannel[i] = rawL[i + warmupSamples];
-      rightChannel[i] = rawR[i + warmupSamples];
+      outL[i] = left[i + warmupSamples];
+      outR[i] = right[i + warmupSamples];
     }
 
-    // 4. Equal-power tail crossfade for zero-seam looping
+    // 3. Equal-power tail crossfade for zero-seam looping
     const tailOffset = warmupSamples + nSamples;
     for (let i = 0; i < crossfadeSamples; i++) {
       const t = i / crossfadeSamples;
       const wTail = Math.cos(0.5 * Math.PI * t);
       const wHead = Math.sin(0.5 * Math.PI * t);
-      leftChannel[i] = rawL[tailOffset + i] * wTail + leftChannel[i] * wHead;
-      rightChannel[i] = rawR[tailOffset + i] * wTail + rightChannel[i] * wHead;
+      outL[i] = left[tailOffset + i] * wTail + left[i] * wHead;
+      outR[i] = right[tailOffset + i] * wTail + right[i] * wHead;
     }
 
-    // 5. Psychoacoustic harmonic bass exciter (adds warmth in the phone speaker zone)
-    for (let i = 0; i < nSamples; i++) {
-      const l = leftChannel[i];
-      const r = rightChannel[i];
-      leftChannel[i] = l + 0.35 * Math.tanh(2.2 * l);
-      rightChannel[i] = r + 0.35 * Math.tanh(2.2 * r);
-    }
-
-    // 6. High-density RMS loudness normalization (~ -9.5 dBFS)
+    // 4. Natural RMS Loudness Normalization (~ -10 dBFS)
     let sumSq = 0;
     for (let i = 0; i < nSamples; i++) {
-      sumSq += leftChannel[i] * leftChannel[i] + rightChannel[i] * rightChannel[i];
+      sumSq += outL[i] * outL[i] + outR[i] * outR[i];
     }
     const currentRms = Math.sqrt(sumSq / (2 * nSamples));
-    const boost = 0.35 / (currentRms || 0.1);
+    const targetGain = 0.32 / (currentRms || 0.1);
 
     for (let i = 0; i < nSamples; i++) {
-      leftChannel[i] = Math.tanh(leftChannel[i] * boost);
-      rightChannel[i] = Math.tanh(rightChannel[i] * boost);
+      outL[i] = Math.tanh(outL[i] * targetGain);
+      outR[i] = Math.tanh(outR[i] * targetGain);
     }
 
-    // Convert into Web Audio API AudioBuffer
     const audioBuffer = targetCtx.createBuffer(2, nSamples, SAMPLE_RATE);
-    audioBuffer.copyToChannel(leftChannel, 0);
-    audioBuffer.copyToChannel(rightChannel, 1);
+    audioBuffer.copyToChannel(outL, 0);
+    audioBuffer.copyToChannel(outR, 1);
 
+    bufferCache.set(profileKey, audioBuffer);
     return audioBuffer;
   }
 
@@ -180,51 +249,25 @@
       audioCtx = new AudioContextClass();
     }
 
-    if (!sharedAudioBuffer) {
-      sharedAudioBuffer = synthesizeBrownNoiseBuffer(audioCtx);
-    }
-
-    // 1. Tone / Warmth lowpass filter (90 Hz to 520 Hz)
+    // 1. Low-pass tone shaping filter (120 Hz to 750 Hz)
     if (!filterNode) {
       filterNode = audioCtx.createBiquadFilter();
       filterNode.type = 'lowpass';
       filterNode.frequency.setValueAtTime(warmthToCutoff(warmth), audioCtx.currentTime);
-      filterNode.Q.setValueAtTime(0.85, audioCtx.currentTime);
+      filterNode.Q.setValueAtTime(0.707, audioCtx.currentTime);
     }
 
-    // 2. Phone Speaker Peaking EQ (280 Hz sweet spot)
-    if (!boostFilterNode) {
-      boostFilterNode = audioCtx.createBiquadFilter();
-      boostFilterNode.type = 'peaking';
-      boostFilterNode.frequency.setValueAtTime(280, audioCtx.currentTime);
-      boostFilterNode.Q.setValueAtTime(1.2, audioCtx.currentTime);
-      boostFilterNode.gain.setValueAtTime(speakerBoost ? 6.5 : 0, audioCtx.currentTime);
-    }
-
-    // 3. Studio Dynamics Compressor (maximizes acoustic density & prevents clipping)
-    if (!compressorNode) {
-      compressorNode = audioCtx.createDynamicsCompressor();
-      compressorNode.threshold.setValueAtTime(speakerBoost ? -20 : -14, audioCtx.currentTime);
-      compressorNode.knee.setValueAtTime(10, audioCtx.currentTime);
-      compressorNode.ratio.setValueAtTime(8, audioCtx.currentTime);
-      compressorNode.attack.setValueAtTime(0.003, audioCtx.currentTime);
-      compressorNode.release.setValueAtTime(0.15, audioCtx.currentTime);
-    }
-
-    // 4. Master Gain Node
+    // 2. Master Gain Node
     if (!gainNode) {
       gainNode = audioCtx.createGain();
       gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
 
-      // Connect DSP chain: Filter -> Peaking EQ -> Compressor -> Gain
-      filterNode.connect(boostFilterNode);
-      boostFilterNode.connect(compressorNode);
-      compressorNode.connect(gainNode);
+      filterNode.connect(gainNode);
 
-      // Master output 1: Hardware speakers / headphones
+      // Hardware output
       gainNode.connect(audioCtx.destination);
 
-      // Master output 2: MediaStream into <audio> tag (prevents iOS background suspension)
+      // MediaStream bridge to <audio> tag for iOS lock-screen background audio
       if (audioCtx.createMediaStreamDestination) {
         try {
           const streamDest = audioCtx.createMediaStreamDestination();
@@ -247,11 +290,8 @@
     }
   }
 
-  // --- Volume Calculation ---
-
   function getTargetVolumeGain() {
-    const boostMultiplier = speakerBoost ? 2.2 : 1.35;
-    return Math.max(0.001, (volume / 100) * boostMultiplier);
+    return Math.max(0.001, (volume / 100) * 1.5);
   }
 
   // --- Playback Control ---
@@ -270,19 +310,19 @@
       audioCtx.resume();
     }
 
-    // AudioBufferSourceNode instances are single-use
-    bufferSourceNode = audioCtx.createBufferSource();
-    bufferSourceNode.buffer = sharedAudioBuffer;
-    bufferSourceNode.loop = true; // Hardware/DSP sample-accurate gapless looping
-    bufferSourceNode.connect(filterNode);
+    const buffer = synthesizeProfileBuffer(activeProfileKey, audioCtx);
 
-    bufferSourceNode.start(0);
+    currentSourceNode = audioCtx.createBufferSource();
+    currentSourceNode.buffer = buffer;
+    currentSourceNode.loop = true; // Hardware/DSP gapless sample-accurate loop
+    currentSourceNode.connect(filterNode);
+    currentSourceNode.start(0);
 
     if (streamAudioEl) {
       streamAudioEl.play().catch(() => {});
     }
 
-    // Smooth studio fade-in (1500ms)
+    // Smooth studio fade-in
     const now = audioCtx.currentTime;
     gainNode.gain.cancelScheduledValues(now);
     gainNode.gain.setValueAtTime(0.0001, now);
@@ -306,18 +346,18 @@
       return;
     }
 
-    // Smooth studio fade-out (1200ms)
+    // Smooth studio fade-out
     const now = audioCtx.currentTime;
     gainNode.gain.cancelScheduledValues(now);
     gainNode.gain.setValueAtTime(gainNode.gain.value, now);
     gainNode.gain.linearRampToValueAtTime(0.0001, now + FADE_OUT_SEC);
 
     setTimeout(() => {
-      if (!isPlaying && bufferSourceNode) {
+      if (!isPlaying && currentSourceNode) {
         try {
-          bufferSourceNode.stop();
-          bufferSourceNode.disconnect();
-          bufferSourceNode = null;
+          currentSourceNode.stop();
+          currentSourceNode.disconnect();
+          currentSourceNode = null;
         } catch (e) {}
         playbackStatus.textContent = 'Ready to play';
       }
@@ -331,6 +371,59 @@
       stop();
     } else {
       play();
+    }
+  }
+
+  // --- Profile Switching with Smooth Crossfade ---
+
+  function selectProfile(profileKey) {
+    if (activeProfileKey === profileKey && currentSourceNode) return;
+
+    activeProfileKey = profileKey;
+    localStorage.setItem(STORAGE_KEYS.PROFILE, profileKey);
+
+    profileChips.forEach((chip) => {
+      if (chip.getAttribute('data-profile') === profileKey) {
+        chip.classList.add('active');
+      } else {
+        chip.classList.remove('active');
+      }
+    });
+
+    const prof = PROFILES[profileKey] || PROFILES.cabin;
+    profileValue.textContent = prof.name;
+
+    if (!isPlaying) return;
+
+    // Smooth real-time crossfade to new profile
+    ensureAudioPipeline();
+    const newBuffer = synthesizeProfileBuffer(profileKey, audioCtx);
+
+    const oldSource = currentSourceNode;
+    const newSource = audioCtx.createBufferSource();
+    newSource.buffer = newBuffer;
+    newSource.loop = true;
+
+    // Create temporary gain node for new source
+    const crossGain = audioCtx.createGain();
+    const now = audioCtx.currentTime;
+    crossGain.gain.setValueAtTime(0.0001, now);
+    crossGain.gain.linearRampToValueAtTime(1.0, now + 0.35);
+
+    newSource.connect(crossGain);
+    crossGain.connect(filterNode);
+    newSource.start(0);
+
+    currentSourceNode = newSource;
+
+    // Fade out and disconnect old source
+    if (oldSource) {
+      setTimeout(() => {
+        try {
+          oldSource.stop();
+          oldSource.disconnect();
+        } catch (e) {}
+      }, 400);
     }
   }
 
@@ -351,37 +444,6 @@
     if (audioCtx && gainNode && isPlaying) {
       const targetGain = getTargetVolumeGain();
       gainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.03);
-    }
-  }
-
-  function toggleSpeakerBoost() {
-    speakerBoost = !speakerBoost;
-    localStorage.setItem(STORAGE_KEYS.BOOST, speakerBoost ? 'true' : 'false');
-    updateSpeakerBoostUI();
-
-    if (audioCtx) {
-      const now = audioCtx.currentTime;
-      if (boostFilterNode) {
-        boostFilterNode.gain.setTargetAtTime(speakerBoost ? 6.5 : 0, now, 0.05);
-      }
-      if (compressorNode) {
-        compressorNode.threshold.setTargetAtTime(speakerBoost ? -20 : -14, now, 0.05);
-      }
-      if (gainNode && isPlaying) {
-        gainNode.gain.setTargetAtTime(getTargetVolumeGain(), now, 0.05);
-      }
-    }
-  }
-
-  function updateSpeakerBoostUI() {
-    if (speakerBoost) {
-      boostBtn.classList.add('active');
-      boostBtn.setAttribute('aria-pressed', 'true');
-      boostStatus.textContent = 'ON';
-    } else {
-      boostBtn.classList.remove('active');
-      boostBtn.setAttribute('aria-pressed', 'false');
-      boostStatus.textContent = 'OFF';
     }
   }
 
@@ -457,8 +519,10 @@
   function updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
 
+    const prof = PROFILES[activeProfileKey] || PROFILES.cabin;
+
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: 'Brown Noise',
+      title: `${prof.name} - Brown Noise`,
       artist: 'Offline Ambient',
       album: 'Deep Warmth',
       artwork: [
@@ -483,6 +547,14 @@
 
   playBtn.addEventListener('click', togglePlay);
 
+  // Profile Chips
+  profileChips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const key = chip.getAttribute('data-profile');
+      if (key) selectProfile(key);
+    });
+  });
+
   // Warmth Slider
   warmthSlider.addEventListener('input', (e) => {
     warmth = parseInt(e.target.value, 10);
@@ -498,9 +570,6 @@
     updateSliderFill(volumeSlider);
     onVolumeChange();
   });
-
-  // Speaker Boost Toggle
-  boostBtn.addEventListener('click', toggleSpeakerBoost);
 
   // Sleep Timer Chips
   timerChips.forEach((chip) => {
@@ -537,6 +606,18 @@
   // --- App Initialization ---
 
   function initializeApp() {
+    // 1. Restore Profile
+    if (!PROFILES[activeProfileKey]) activeProfileKey = 'cabin';
+    profileChips.forEach((chip) => {
+      if (chip.getAttribute('data-profile') === activeProfileKey) {
+        chip.classList.add('active');
+      } else {
+        chip.classList.remove('active');
+      }
+    });
+    profileValue.textContent = (PROFILES[activeProfileKey] || PROFILES.cabin).name;
+
+    // 2. Restore Sliders
     warmthSlider.value = warmth;
     warmthValue.textContent = formatWarmthLabel(warmth);
     updateSliderFill(warmthSlider);
@@ -545,8 +626,7 @@
     volumeValue.textContent = `${volume}%`;
     updateSliderFill(volumeSlider);
 
-    updateSpeakerBoostUI();
-
+    // 3. Restore Timer
     timerChips.forEach((chip) => {
       const mins = parseInt(chip.getAttribute('data-minutes') || '0', 10);
       if (mins === timerMinutes) {

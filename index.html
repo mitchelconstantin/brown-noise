@@ -70,6 +70,21 @@
 
       <!-- Sliders Section -->
       <section class="controls-section">
+        <!-- Sound Profile Selector -->
+        <div class="profile-section">
+          <div class="control-header">
+            <span class="control-title">Sound Profile</span>
+            <span class="control-value" id="profileValue">Airplane Cabin</span>
+          </div>
+          <div class="profile-chips" role="radiogroup" aria-label="Sound profiles">
+            <button class="profile-chip active" data-profile="cabin" title="Deep cruising jet cabin airflow">Cabin</button>
+            <button class="profile-chip" data-profile="waterfall" title="Heavy roaring dark waterfall">Waterfall</button>
+            <button class="profile-chip" data-profile="downpour" title="Warm continuous downpour">Downpour</button>
+            <button class="profile-chip" data-profile="ocean" title="Deep rolling ocean surf">Ocean</button>
+            <button class="profile-chip" data-profile="classic" title="Classic pure brown noise">Classic</button>
+          </div>
+        </div>
+
         <!-- Tone / Warmth Slider -->
         <div class="control-group">
           <div class="control-header">
@@ -116,17 +131,6 @@
             <span>0%</span>
             <span>100%</span>
           </div>
-        </div>
-
-        <!-- Speaker Boost (Phone Optimization) -->
-        <div class="boost-group">
-          <div class="boost-info">
-            <span class="control-title">Speaker Boost</span>
-            <span class="boost-desc">Optimizes loudness &amp; harmonics for phone speakers</span>
-          </div>
-          <button class="boost-toggle active" id="boostBtn" aria-pressed="true" title="Toggle loudness boost for phone speakers">
-            <span class="boost-status" id="boostStatus">ON</span>
-          </button>
         </div>
 
         <!-- Sleep Timer Row -->
