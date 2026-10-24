@@ -446,58 +446,46 @@ html, body {
 }
 
 /* ==========================================================================
-   Configuration Display & Copy Button
+   Presets Selector
    ========================================================================== */
-.config-box {
+.preset-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background-color: rgba(22, 17, 14, 0.65);
-  border: 1px solid var(--color-surface-border);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-}
-
-.config-display {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.74rem;
-  line-height: 1.4;
-  color: var(--color-accent-light);
-  word-break: break-all;
-  user-select: all;
-  -webkit-user-select: all;
-}
-
-.config-copy-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   gap: 8px;
-  width: 100%;
-  padding: 10px 14px;
+}
+
+.preset-chips {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.preset-chip {
+  background: #1e1713;
+  border: 1px solid var(--color-surface-border);
+  color: var(--color-text-muted);
   border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--color-accent-light), var(--color-accent));
-  color: #16110e;
-  border: none;
-  font-size: 0.82rem;
-  font-weight: 700;
+  padding: 9px 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
   cursor: pointer;
+  outline: none;
+  text-align: center;
   transition: all var(--transition-fast);
-  box-shadow: 0 2px 10px var(--color-accent-glow);
   touch-action: manipulation;
 }
 
-.config-copy-btn:hover {
-  filter: brightness(1.08);
+.preset-chip:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
-.config-copy-btn:active {
-  transform: scale(0.98);
-}
-
-.copy-icon {
-  width: 16px;
-  height: 16px;
+.preset-chip.active {
+  background: linear-gradient(135deg, var(--color-accent-light), var(--color-accent));
+  border-color: var(--color-accent-light);
+  color: #16110e;
+  font-weight: 700;
+  box-shadow: 0 2px 10px var(--color-accent-glow);
 }
 
 /* ==========================================================================

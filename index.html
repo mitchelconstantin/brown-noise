@@ -70,37 +70,51 @@
 
       <!-- Sliders Section -->
       <section class="controls-section">
-      <!-- Controls Section & Live Tuning Bench -->
+      <!-- Controls Section -->
       <section class="controls-section">
-        <!-- 1. Tone Cutoff -->
+        <!-- Preset Selector -->
+        <div class="preset-section">
+          <div class="control-header">
+            <span class="control-title">Presets</span>
+            <span class="control-value" id="presetValue">Open (1200 Hz)</span>
+          </div>
+          <div class="preset-chips" role="radiogroup" aria-label="Noise Presets">
+            <button class="preset-chip active" data-preset="open" title="Open & loud (1200 Hz, 1x slope)">Open</button>
+            <button class="preset-chip" data-preset="warm" title="Warm ambient (800 Hz, 1x slope)">Warm</button>
+            <button class="preset-chip" data-preset="deep" title="Deep brown (500 Hz, 2x slope)">Deep</button>
+            <button class="preset-chip" data-preset="rumble" title="Sub rumble (250 Hz, 2x slope)">Rumble</button>
+          </div>
+        </div>
+
+        <!-- 1. Tone Cutoff Slider -->
         <div class="control-group">
           <div class="control-header">
-            <span class="control-title">1. Tone Cutoff</span>
-            <span class="control-value" id="cutoffValue">450 Hz</span>
+            <span class="control-title">Tone Cutoff</span>
+            <span class="control-value" id="cutoffValue">1200 Hz</span>
           </div>
           <div class="slider-wrapper">
             <input 
               type="range" 
               id="cutoffSlider" 
               class="range-slider" 
-              min="80" 
+              min="100" 
               max="1200" 
-              value="450" 
+              value="1200" 
               step="10"
               aria-label="Tone Cutoff"
             >
           </div>
           <div class="control-labels">
-            <span>80 Hz (Sub-Bass)</span>
-            <span>1200 Hz (Bright)</span>
+            <span>100 Hz (Dark)</span>
+            <span>1200 Hz (Open)</span>
           </div>
         </div>
 
-        <!-- 2. Filter Slope -->
+        <!-- 2. Filter Slope Slider -->
         <div class="control-group">
           <div class="control-header">
-            <span class="control-title">2. Filter Slope (Steepness)</span>
-            <span class="control-value" id="slopeValue">2x (Balanced)</span>
+            <span class="control-title">Filter Slope (Steepness)</span>
+            <span class="control-value" id="slopeValue">1x (Gentle / 6 dB)</span>
           </div>
           <div class="slider-wrapper">
             <input 
@@ -109,7 +123,7 @@
               class="range-slider" 
               min="1" 
               max="4" 
-              value="2" 
+              value="1" 
               step="1"
               aria-label="Filter Slope"
             >
@@ -118,91 +132,6 @@
             <span>1x Gentle</span>
             <span>4x Steep</span>
           </div>
-        </div>
-
-        <!-- 3. Low Rumble -->
-        <div class="control-group">
-          <div class="control-header">
-            <span class="control-title">3. Low Rumble (Bass)</span>
-            <span class="control-value" id="lowRumbleValue">+2 dB</span>
-          </div>
-          <div class="slider-wrapper">
-            <input 
-              type="range" 
-              id="lowRumbleSlider" 
-              class="range-slider" 
-              min="-10" 
-              max="12" 
-              value="2" 
-              step="1"
-              aria-label="Low Rumble"
-            >
-          </div>
-          <div class="control-labels">
-            <span>-10 dB</span>
-            <span>+12 dB</span>
-          </div>
-        </div>
-
-        <!-- 4. Mid Body (Phone Loudness) -->
-        <div class="control-group">
-          <div class="control-header">
-            <span class="control-title">4. Mid Body (Phone Presence)</span>
-            <span class="control-value" id="midBodyValue">+6 dB</span>
-          </div>
-          <div class="slider-wrapper">
-            <input 
-              type="range" 
-              id="midBodySlider" 
-              class="range-slider" 
-              min="-6" 
-              max="14" 
-              value="6" 
-              step="1"
-              aria-label="Mid Body"
-            >
-          </div>
-          <div class="control-labels">
-            <span>-6 dB (Soft)</span>
-            <span>+14 dB (Loud)</span>
-          </div>
-        </div>
-
-        <!-- 5. Volume Slider -->
-        <div class="control-group">
-          <div class="control-header">
-            <span class="control-title">5. Volume</span>
-            <span class="control-value" id="volumeValue">85%</span>
-          </div>
-          <div class="slider-wrapper">
-            <input 
-              type="range" 
-              id="volumeSlider" 
-              class="range-slider" 
-              min="0" 
-              max="100" 
-              value="85" 
-              step="1"
-              aria-label="Volume"
-            >
-          </div>
-          <div class="control-labels">
-            <span>0%</span>
-            <span>100%</span>
-          </div>
-        </div>
-
-        <!-- Configuration Share Box -->
-        <div class="config-box">
-          <div class="config-display" id="configDisplay">
-            Cutoff: 450Hz | Slope: 2x | Low: +2dB | Mid: +6dB | Vol: 85%
-          </div>
-          <button class="config-copy-btn" id="copyConfigBtn" title="Copy current configuration to clipboard">
-            <svg class="copy-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
-            </svg>
-            <span id="copyBtnText">Copy Configuration</span>
-          </button>
         </div>
 
         <!-- Sleep Timer Row -->

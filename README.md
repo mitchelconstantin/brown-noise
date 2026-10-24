@@ -10,13 +10,13 @@ Designed with an espresso and warm amber dark aesthetic, it runs 100% offline wi
 
 * **Zero Dependencies & No CDNs:** Pure HTML5, CSS3, and modern vanilla JavaScript. No npm packages, no build steps, no Google Fonts, no external icons, and no remote audio files.
 * **iOS Background Playback Safe:** Avoids live `AudioContext` pipelines which iOS Safari suspends when locked or backgrounded. Instead, procedurally generates a seamless 16-bit stereo `.wav` file into an in-memory `Blob` and feeds standard HTML5 `<audio loop playsinline>`.
-* **Interactive Sound Sculpting Studio:** Real-time parameter controls allowing you to customize and audition the exact frequency response that sounds best through your phone speakers:
-  * **1. Tone Cutoff:** (80 Hz to 1200 Hz) Controls the upper frequency boundary.
-  * **2. Filter Slope:** (1x Gentle to 4x Steep) Sets the steepness of high-frequency attenuation.
-  * **3. Low Rumble:** (-10 dB to +12 dB) Sets sub-bass & low shelf weight at 140 Hz.
-  * **4. Mid Body (Phone Loudness):** (-6 dB to +14 dB) Boosts the 450 Hz resonant presence where smartphone speakers project loudly without harshness.
-  * **5. Volume:** (0% to 100%) Master clean output gain.
-  * **1-Tap Config Export:** Live configuration display box with a 1-tap "Copy Configuration" button to easily share favorite configurations.
+* **Curated Acoustic Presets & Custom Sliders:**
+  * **Open (1200 Hz, 1x Slope):** Maximum open, natural, loud acoustic presence.
+  * **Warm (800 Hz, 1x Slope):** Smooth, warm ambient room sound.
+  * **Deep (500 Hz, 2x Slope):** Balanced, relaxing, classic dark brown noise.
+  * **Rumble (250 Hz, 2x Slope):** Heavy, dark sub-rumble for deep sleep.
+  * **Custom Sliders:** Real-time **Tone Cutoff** (100 Hz to 1200 Hz) and **Filter Slope** (1x to 4x) sliders for full personalized control.
+* **Maximized Hardware Output:** Master volume is permanently locked at the cleanest, loudest possible level (`1.0`), delegating volume control directly to your phone's physical hardware buttons.
 * **Pure Gaussian Noise Synthesis:** Employs the Box-Muller transform for true Gaussian noise with zero synthetic distortion, grain, or scratchiness.
 * **Seamless Gapless Looping:** Sample-accurate loop architecture with a 25-second high-resolution stereo buffer, DC-blocker filtering, and an equal-power crossfade between the end and beginning of the audio buffer, producing zero clicks, pops, or looping skips.
 * **Live Tone Crossfading:** Adjusting the Warmth slider while playing triggers a smooth dual-audio crossfade so the tone shifts seamlessly without dropouts or audio glitches.

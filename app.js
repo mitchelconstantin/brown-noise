@@ -1,7 +1,7 @@
 /**
  * Offline-First Brown Noise PWA
- * Real-time sound sculpting engine for mobile speaker tuning.
- * Pure Gaussian synthesis with zero scratchiness or artificial distortion.
+ * Clean Gaussian brown noise with real-time Tone Cutoff & Slope controls,
+ * 4 curated presets, and hardware physical volume control.
  */
 
 (function () {
@@ -9,19 +9,40 @@
 
   // --- Constants & Config ---
   const SAMPLE_RATE = 44100;
-  const BUFFER_DURATION_SEC = 25;  // 25-second seamless buffer
+  const BUFFER_DURATION_SEC = 25;  // 25-second seamless loop buffer
   const WARMUP_SEC = 2.0;          // 2s warmup to stabilize leaky integration
   const CROSSFADE_SEC = 3.0;       // 3s equal-power crossfade for seamless looping
-  const FADE_IN_SEC = 1.0;
-  const FADE_OUT_SEC = 0.8;
+  const FADE_IN_SEC = 1.2;
+  const FADE_OUT_SEC = 1.0;
 
   const STORAGE_KEYS = {
-    CUTOFF: 'bn_sculpt_cutoff',
-    SLOPE: 'bn_sculpt_slope',
-    LOW: 'bn_sculpt_low',
-    MID: 'bn_sculpt_mid',
-    VOLUME: 'bn_sculpt_volume',
-    TIMER: 'bn_sculpt_timer'
+    PRESET: 'bn_active_preset',
+    CUTOFF: 'bn_cutoff_hz',
+    SLOPE: 'bn_slope_val',
+    TIMER: 'bn_sleep_timer'
+  };
+
+  const PRESETS = {
+    open: {
+      name: 'Open (1200 Hz)',
+      cutoff: 1200,
+      slope: 1
+    },
+    warm: {
+      name: 'Warm (800 Hz)',
+      cutoff: 800,
+      slope: 1
+    },
+    deep: {
+      name: 'Deep (500 Hz)',
+      cutoff: 500,
+      slope: 2
+    },
+    rumble: {
+      name: 'Rumble (250 Hz)',
+      cutoff: 250,
+      slope: 2
+    }
   };
 
   // --- DOM Elements ---
@@ -31,20 +52,13 @@
   const visualizerContainer = document.getElementById('visualizerContainer');
   const playbackStatus = document.getElementById('playbackStatus');
 
+  const presetChips = document.querySelectorAll('.preset-chip');
+  const presetValue = document.getElementById('presetValue');
+
   const cutoffSlider = document.getElementById('cutoffSlider');
   const cutoffValue = document.getElementById('cutoffValue');
   const slopeSlider = document.getElementById('slopeSlider');
   const slopeValue = document.getElementById('slopeValue');
-  const lowRumbleSlider = document.getElementById('lowRumbleSlider');
-  const lowRumbleValue = document.getElementById('lowRumbleValue');
-  const midBodySlider = document.getElementById('midBodySlider');
-  const midBodyValue = document.getElementById('midBodyValue');
-  const volumeSlider = document.getElementById('volumeSlider');
-  const volumeValue = document.getElementById('volumeValue');
-
-  const configDisplay = document.getElementById('configDisplay');
-  const copyConfigBtn = document.getElementById('copyConfigBtn');
-  const copyBtnText = document.getElementById('copyBtnText');
 
   const timerCountdown = document.getElementById('timerCountdown');
   const timerChips = document.querySelectorAll('.timer-chip');
@@ -52,30 +66,26 @@
 
   // --- App State ---
   let isPlaying = false;
-  let cutoff = parseInt(localStorage.getItem(STORAGE_KEYS.CUTOFF) || '450', 10);
-  let slope = parseInt(localStorage.getItem(STORAGE_KEYS.SLOPE) || '2', 10);
-  let lowRumble = parseInt(localStorage.getItem(STORAGE_KEYS.LOW) || '2', 10);
-  let midBody = parseInt(localStorage.getItem(STORAGE_KEYS.MID) || '6', 10);
-  let volume = parseInt(localStorage.getItem(STORAGE_KEYS.VOLUME) || '85', 10);
+  let activePresetKey = localStorage.getItem(STORAGE_KEYS.PRESET) || 'open';
+  let cutoff = parseInt(localStorage.getItem(STORAGE_KEYS.CUTOFF) || '1200', 10);
+  let slope = parseInt(localStorage.getItem(STORAGE_KEYS.SLOPE) || '1', 10);
   let timerMinutes = parseInt(localStorage.getItem(STORAGE_KEYS.TIMER) || '0', 10);
 
   let sleepTimerInterval = null;
   let sleepTimerEndTime = null;
 
-  // --- Audio Engine Nodes ---
+  // --- Audio Nodes ---
   let audioCtx = null;
   let sourceNode = null;
   let lpFilter1 = null;
   let lpFilter2 = null;
-  let lowShelfFilter = null;
-  let midPeakingFilter = null;
   let gainNode = null;
   let streamAudioEl = null;
   let cachedAudioBuffer = null;
 
   /**
-   * Generates pure Gaussian random variable via Box-Muller transform.
-   * Completely eliminates the harsh scratchy grit of pseudo-random white noise.
+   * Generates pure Gaussian random noise via Box-Muller transform.
+   * Eliminates the harsh scratchy grit of pseudo-random uniform white noise.
    */
   function gaussianRandom() {
     let u1 = 0, u2 = 0;
@@ -85,11 +95,9 @@
   }
 
   /**
-   * Procedural Audio Buffer Synthesis:
-   * 1. Generates pure Gaussian brown noise with leaky integration.
-   * 2. DC-blocks baseline wander.
-   * 3. 3s equal-power crossfade for sample-accurate gapless looping.
-   * 4. NO non-linear saturation or distortion is applied (preserving silky smoothness).
+   * Procedural Audio Synthesis:
+   * Pure Gaussian brown noise with leaky integration and DC blocking.
+   * Completely linear synthesis with zero saturation clipping (silky, scratch-free).
    */
   function createPureBrownNoiseBuffer(targetCtx) {
     if (cachedAudioBuffer) return cachedAudioBuffer;
@@ -140,7 +148,7 @@
       outR[i] = right[i + warmupSamples];
     }
 
-    // Seamless loop crossfade
+    // Equal-power tail crossfade for zero-seam looping
     const tailOffset = warmupSamples + nSamples;
     for (let i = 0; i < crossfadeSamples; i++) {
       const t = i / crossfadeSamples;
@@ -150,7 +158,7 @@
       outR[i] = right[tailOffset + i] * wTail + right[i] * wHead;
     }
 
-    // Clean linear normalization (no distortion clipping)
+    // Clean linear normalization to 0.95 peak (loudest possible clean output)
     let maxPeak = 0;
     for (let i = 0; i < nSamples; i++) {
       const aL = Math.abs(outL[i]);
@@ -158,7 +166,7 @@
       if (aL > maxPeak) maxPeak = aL;
       if (aR > maxPeak) maxPeak = aR;
     }
-    const scale = maxPeak > 0 ? 0.90 / maxPeak : 1.0;
+    const scale = maxPeak > 0 ? 0.95 / maxPeak : 1.0;
     for (let i = 0; i < nSamples; i++) {
       outL[i] *= scale;
       outR[i] *= scale;
@@ -192,7 +200,7 @@
       lpFilter1.Q.setValueAtTime(0.707, audioCtx.currentTime);
     }
 
-    // 2. Secondary Low-pass filter (controls Slope / Steepness)
+    // 2. Secondary Low-pass filter (Slope steepness)
     if (!lpFilter2) {
       lpFilter2 = audioCtx.createBiquadFilter();
       lpFilter2.type = 'lowpass';
@@ -200,33 +208,13 @@
       lpFilter2.Q.setValueAtTime(0.707, audioCtx.currentTime);
     }
 
-    // 3. Low-Shelf Filter (Low Rumble 140 Hz)
-    if (!lowShelfFilter) {
-      lowShelfFilter = audioCtx.createBiquadFilter();
-      lowShelfFilter.type = 'lowshelf';
-      lowShelfFilter.frequency.setValueAtTime(140, audioCtx.currentTime);
-      lowShelfFilter.gain.setValueAtTime(lowRumble, audioCtx.currentTime);
-    }
-
-    // 4. Peaking Mid Filter (Phone Loudness Sweet-spot 450 Hz)
-    if (!midPeakingFilter) {
-      midPeakingFilter = audioCtx.createBiquadFilter();
-      midPeakingFilter.type = 'peaking';
-      midPeakingFilter.frequency.setValueAtTime(450, audioCtx.currentTime);
-      midPeakingFilter.Q.setValueAtTime(1.1, audioCtx.currentTime);
-      midPeakingFilter.gain.setValueAtTime(midBody, audioCtx.currentTime);
-    }
-
-    // 5. Master Gain
+    // 3. Master Output Gain (Kept at loudest possible clean level: 1.0)
     if (!gainNode) {
       gainNode = audioCtx.createGain();
       gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
 
-      // Connect filter chain: lpFilter1 -> lpFilter2 -> lowShelf -> midPeaking -> gain
       lpFilter1.connect(lpFilter2);
-      lpFilter2.connect(lowShelfFilter);
-      lowShelfFilter.connect(midPeakingFilter);
-      midPeakingFilter.connect(gainNode);
+      lpFilter2.connect(gainNode);
 
       // Hardware output
       gainNode.connect(audioCtx.destination);
@@ -260,41 +248,25 @@
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
 
-    // Apply cutoff to filter 1
     if (lpFilter1) {
       lpFilter1.frequency.setTargetAtTime(cutoff, now, 0.03);
     }
 
-    // Slope calculation:
-    // slope 1: second filter wide open (bypassed)
-    // slope 2: second filter tracks cutoff (12 dB/oct)
-    // slope 3: second filter tighter (18 dB/oct)
-    // slope 4: high resonance / 24 dB/oct steep
     if (lpFilter2) {
       if (slope === 1) {
+        // Slope 1: 6 dB/oct gentle slope (second filter wide open)
         lpFilter2.frequency.setTargetAtTime(18000, now, 0.03);
       } else if (slope === 2) {
-        lpFilter2.frequency.setTargetAtTime(cutoff * 1.3, now, 0.03);
+        // Slope 2: 12 dB/oct standard slope
+        lpFilter2.frequency.setTargetAtTime(cutoff * 1.25, now, 0.03);
       } else if (slope === 3) {
+        // Slope 3: 18 dB/oct deep slope
         lpFilter2.frequency.setTargetAtTime(cutoff, now, 0.03);
       } else {
+        // Slope 4: 24 dB/oct steep slope
         lpFilter2.frequency.setTargetAtTime(cutoff * 0.85, now, 0.03);
       }
     }
-
-    // Low rumble gain
-    if (lowShelfFilter) {
-      lowShelfFilter.gain.setTargetAtTime(lowRumble, now, 0.03);
-    }
-
-    // Mid body gain
-    if (midPeakingFilter) {
-      midPeakingFilter.gain.setTargetAtTime(midBody, now, 0.03);
-    }
-  }
-
-  function getTargetVolumeGain() {
-    return Math.max(0.001, (volume / 100) * 1.6);
   }
 
   // --- Playback Control ---
@@ -315,7 +287,7 @@
 
     sourceNode = audioCtx.createBufferSource();
     sourceNode.buffer = cachedAudioBuffer;
-    sourceNode.loop = true; // Hardware sample-accurate seamless looping
+    sourceNode.loop = true; // Hardware sample-accurate gapless loop
     sourceNode.connect(lpFilter1);
     sourceNode.start(0);
 
@@ -323,11 +295,11 @@
       streamAudioEl.play().catch(() => {});
     }
 
-    // Smooth studio fade-in
+    // Smooth fade-in to loudest clean output (1.0)
     const now = audioCtx.currentTime;
     gainNode.gain.cancelScheduledValues(now);
     gainNode.gain.setValueAtTime(0.0001, now);
-    gainNode.gain.linearRampToValueAtTime(getTargetVolumeGain(), now + FADE_IN_SEC);
+    gainNode.gain.linearRampToValueAtTime(1.0, now + FADE_IN_SEC);
 
     if (timerMinutes > 0 && !sleepTimerEndTime) {
       startSleepTimer(timerMinutes);
@@ -374,22 +346,78 @@
     }
   }
 
-  // --- Real-time Parameter Updates ---
+  // --- Preset & Slider Logic ---
+
+  function selectPreset(key) {
+    const p = PRESETS[key];
+    if (!p) return;
+
+    activePresetKey = key;
+    cutoff = p.cutoff;
+    slope = p.slope;
+
+    localStorage.setItem(STORAGE_KEYS.PRESET, key);
+    localStorage.setItem(STORAGE_KEYS.CUTOFF, cutoff.toString());
+    localStorage.setItem(STORAGE_KEYS.SLOPE, slope.toString());
+
+    // Update UI chips
+    presetChips.forEach((chip) => {
+      if (chip.getAttribute('data-preset') === key) {
+        chip.classList.add('active');
+      } else {
+        chip.classList.remove('active');
+      }
+    });
+
+    presetValue.textContent = p.name;
+
+    // Update Sliders
+    cutoffSlider.value = cutoff;
+    cutoffValue.textContent = `${cutoff} Hz`;
+    updateSliderFill(cutoffSlider);
+
+    slopeSlider.value = slope;
+    slopeValue.textContent = formatSlopeText(slope);
+    updateSliderFill(slopeSlider);
+
+    applyFilterParameters();
+  }
+
+  function onManualSliderChange() {
+    // Check if current values match any known preset
+    let matchedKey = null;
+    for (const [key, p] of Object.entries(PRESETS)) {
+      if (p.cutoff === cutoff && p.slope === slope) {
+        matchedKey = key;
+        break;
+      }
+    }
+
+    activePresetKey = matchedKey || 'custom';
+    localStorage.setItem(STORAGE_KEYS.PRESET, activePresetKey);
+
+    presetChips.forEach((chip) => {
+      if (chip.getAttribute('data-preset') === activePresetKey) {
+        chip.classList.add('active');
+      } else {
+        chip.classList.remove('active');
+      }
+    });
+
+    if (matchedKey) {
+      presetValue.textContent = PRESETS[matchedKey].name;
+    } else {
+      presetValue.textContent = `Custom (${cutoff} Hz, ${slope}x)`;
+    }
+
+    applyFilterParameters();
+  }
 
   function formatSlopeText(val) {
-    if (val === 1) return '1x (Gentle / 6dB)';
-    if (val === 2) return '2x (Balanced / 12dB)';
-    if (val === 3) return '3x (Deep / 18dB)';
-    return '4x (Steep / 24dB)';
-  }
-
-  function formatDb(val) {
-    return (val > 0 ? `+${val}` : `${val}`) + ' dB';
-  }
-
-  function updateConfigString() {
-    const configStr = `Cutoff: ${cutoff}Hz | Slope: ${slope}x | Low: ${formatDb(lowRumble)} | Mid: ${formatDb(midBody)} | Vol: ${volume}%`;
-    configDisplay.textContent = configStr;
+    if (val === 1) return '1x (Gentle / 6 dB)';
+    if (val === 2) return '2x (Balanced / 12 dB)';
+    if (val === 3) return '3x (Deep / 18 dB)';
+    return '4x (Steep / 24 dB)';
   }
 
   // --- Sleep Timer ---
@@ -464,10 +492,12 @@
   function updateMediaSession() {
     if (!('mediaSession' in navigator)) return;
 
+    const titleText = PRESETS[activePresetKey] ? PRESETS[activePresetKey].name : `Custom (${cutoff} Hz)`;
+
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: 'Brown Noise Studio',
+      title: `${titleText} - Brown Noise`,
       artist: 'Offline Ambient',
-      album: 'Custom Tone',
+      album: 'Deep Sound',
       artwork: [
         { src: './icons/icon-192.png', sizes: '192x192', type: 'image/png' },
         { src: './icons/icon-512.png', sizes: '512x512', type: 'image/png' },
@@ -490,84 +520,30 @@
 
   playBtn.addEventListener('click', togglePlay);
 
-  // 1. Cutoff
+  // Preset Chips
+  presetChips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const key = chip.getAttribute('data-preset');
+      if (key) selectPreset(key);
+    });
+  });
+
+  // Cutoff Slider
   cutoffSlider.addEventListener('input', (e) => {
     cutoff = parseInt(e.target.value, 10);
     cutoffValue.textContent = `${cutoff} Hz`;
     updateSliderFill(cutoffSlider);
-    updateConfigString();
     localStorage.setItem(STORAGE_KEYS.CUTOFF, cutoff.toString());
-    applyFilterParameters();
+    onManualSliderChange();
   });
 
-  // 2. Slope
+  // Slope Slider
   slopeSlider.addEventListener('input', (e) => {
     slope = parseInt(e.target.value, 10);
     slopeValue.textContent = formatSlopeText(slope);
     updateSliderFill(slopeSlider);
-    updateConfigString();
     localStorage.setItem(STORAGE_KEYS.SLOPE, slope.toString());
-    applyFilterParameters();
-  });
-
-  // 3. Low Rumble
-  lowRumbleSlider.addEventListener('input', (e) => {
-    lowRumble = parseInt(e.target.value, 10);
-    lowRumbleValue.textContent = formatDb(lowRumble);
-    updateSliderFill(lowRumbleSlider);
-    updateConfigString();
-    localStorage.setItem(STORAGE_KEYS.LOW, lowRumble.toString());
-    applyFilterParameters();
-  });
-
-  // 4. Mid Body
-  midBodySlider.addEventListener('input', (e) => {
-    midBody = parseInt(e.target.value, 10);
-    midBodyValue.textContent = formatDb(midBody);
-    updateSliderFill(midBodySlider);
-    updateConfigString();
-    localStorage.setItem(STORAGE_KEYS.MID, midBody.toString());
-    applyFilterParameters();
-  });
-
-  // 5. Volume
-  volumeSlider.addEventListener('input', (e) => {
-    volume = parseInt(e.target.value, 10);
-    volumeValue.textContent = `${volume}%`;
-    updateSliderFill(volumeSlider);
-    updateConfigString();
-    localStorage.setItem(STORAGE_KEYS.VOLUME, volume.toString());
-    if (audioCtx && gainNode && isPlaying) {
-      gainNode.gain.setTargetAtTime(getTargetVolumeGain(), audioCtx.currentTime, 0.03);
-    }
-  });
-
-  // Copy Configuration Button
-  copyConfigBtn.addEventListener('click', () => {
-    const textToCopy = configDisplay.textContent.trim();
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(textToCopy).then(() => {
-        copyBtnText.textContent = 'Copied to Clipboard!';
-        setTimeout(() => {
-          copyBtnText.textContent = 'Copy Configuration';
-        }, 2200);
-      }).catch(fallbackCopy);
-    } else {
-      fallbackCopy();
-    }
-
-    function fallbackCopy() {
-      const textarea = document.createElement('textarea');
-      textarea.value = textToCopy;
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      copyBtnText.textContent = 'Copied!';
-      setTimeout(() => {
-        copyBtnText.textContent = 'Copy Configuration';
-      }, 2200);
-    }
+    onManualSliderChange();
   });
 
   // Sleep Timer Chips
@@ -605,28 +581,21 @@
   // --- App Initialization ---
 
   function initializeApp() {
-    // 1. Restore Sliders
-    cutoffSlider.value = cutoff;
-    cutoffValue.textContent = `${cutoff} Hz`;
-    updateSliderFill(cutoffSlider);
+    // 1. Restore Preset or Custom
+    if (PRESETS[activePresetKey]) {
+      selectPreset(activePresetKey);
+    } else {
+      cutoffSlider.value = cutoff;
+      cutoffValue.textContent = `${cutoff} Hz`;
+      updateSliderFill(cutoffSlider);
 
-    slopeSlider.value = slope;
-    slopeValue.textContent = formatSlopeText(slope);
-    updateSliderFill(slopeSlider);
+      slopeSlider.value = slope;
+      slopeValue.textContent = formatSlopeText(slope);
+      updateSliderFill(slopeSlider);
 
-    lowRumbleSlider.value = lowRumble;
-    lowRumbleValue.textContent = formatDb(lowRumble);
-    updateSliderFill(lowRumbleSlider);
-
-    midBodySlider.value = midBody;
-    midBodyValue.textContent = formatDb(midBody);
-    updateSliderFill(midBodySlider);
-
-    volumeSlider.value = volume;
-    volumeValue.textContent = `${volume}%`;
-    updateSliderFill(volumeSlider);
-
-    updateConfigString();
+      presetValue.textContent = `Custom (${cutoff} Hz, ${slope}x)`;
+      presetChips.forEach((chip) => chip.classList.remove('active'));
+    }
 
     // 2. Restore Timer
     timerChips.forEach((chip) => {
