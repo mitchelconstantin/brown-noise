@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Brown Noise | Deep Offline Sound</title>
+
+  <!-- PWA & Mobile Optimization -->
+  <meta name="description" content="Pure offline brown noise progressive web app for deep sleep, focus, and relaxation with seamless background playback.">
+  <meta name="theme-color" content="#16110E">
+  <meta name="color-scheme" content="dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Brown Noise">
+  <meta name="format-detection" content="telephone=no">
+
+  <!-- Relative Icons & Manifest -->
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg">
+  <link rel="icon" type="image/x-icon" href="./favicon.ico">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-group">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+        </svg>
+        <span class="app-title">Brown Noise</span>
+      </div>
+      <div class="offline-badge" id="offlineBadge" title="Works 100% offline">
+        <span class="status-dot"></span>
+        <span class="status-text">Offline Ready</span>
+      </div>
+    </header>
+
+    <!-- Main Player Card -->
+    <main class="player-card">
+      <!-- Glow & Visualizer Rings -->
+      <div class="visualizer-container" id="visualizerContainer">
+        <div class="pulse-ring ring-3"></div>
+        <div class="pulse-ring ring-2"></div>
+        <div class="pulse-ring ring-1"></div>
+
+        <!-- Central Play / Stop Button -->
+        <button class="play-button" id="playBtn" aria-label="Play brown noise" title="Play / Stop">
+          <div class="button-inner">
+            <!-- Play Icon -->
+            <svg class="icon-play" id="iconPlay" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5.14v13.72a1 1 0 0 0 1.54.84l11-6.86a1 1 0 0 0 0-1.68L9.54 4.3A1 1 0 0 0 8 5.14z"/>
+            </svg>
+            <!-- Stop / Pause Icon -->
+            <svg class="icon-stop hidden" id="iconStop" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="2.5" />
+            </svg>
+          </div>
+        </button>
+      </div>
+
+      <!-- Playback Status -->
+      <div class="status-indicator">
+        <span class="status-label" id="playbackStatus">Ready to play</span>
+      </div>
+
+      <!-- Sliders Section -->
+      <section class="controls-section">
+        <!-- Tone / Warmth Slider -->
+        <div class="control-group">
+          <div class="control-header">
+            <span class="control-title">Warmth &amp; Tone</span>
+            <span class="control-value" id="warmthValue">Deep Rumble</span>
+          </div>
+          <div class="slider-wrapper">
+            <input 
+              type="range" 
+              id="warmthSlider" 
+              class="range-slider" 
+              min="0" 
+              max="100" 
+              value="40" 
+              step="1"
+              aria-label="Tone Warmth"
+            >
+          </div>
+          <div class="control-labels">
+            <span>Deep Rumble</span>
+            <span>Soft Brown</span>
+          </div>
+        </div>
+
+        <!-- Volume Slider -->
+        <div class="control-group">
+          <div class="control-header">
+            <span class="control-title">Volume</span>
+            <span class="control-value" id="volumeValue">80%</span>
+          </div>
+          <div class="slider-wrapper">
+            <input 
+              type="range" 
+              id="volumeSlider" 
+              class="range-slider" 
+              min="0" 
+              max="100" 
+              value="80" 
+              step="1"
+              aria-label="Volume"
+            >
+          </div>
+          <div class="control-labels">
+            <span>0%</span>
+            <span>100%</span>
+          </div>
+        </div>
+
+        <!-- Sleep Timer Row -->
+        <div class="timer-section">
+          <div class="timer-header">
+            <span class="control-title">Sleep Timer</span>
+            <span class="timer-countdown" id="timerCountdown">Continuous</span>
+          </div>
+          <div class="timer-options" role="radiogroup" aria-label="Sleep timer">
+            <button class="timer-chip active" data-minutes="0">Off</button>
+            <button class="timer-chip" data-minutes="15">15m</button>
+            <button class="timer-chip" data-minutes="30">30m</button>
+            <button class="timer-chip" data-minutes="45">45m</button>
+            <button class="timer-chip" data-minutes="60">60m</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer / Subtitle -->
+    <footer class="app-footer">
+      <span>Zero network requests &bull; Seamless looping &bull; Background audio</span>
+    </footer>
+  </div>
+
+  <!-- Audio elements managed dynamically in app.js -->
+  <audio id="audioA" loop playsinline preload="auto"></audio>
+  <audio id="audioB" loop playsinline preload="auto"></audio>
+
+  <script src="./app.js"></script>
+</body>
+</html>
