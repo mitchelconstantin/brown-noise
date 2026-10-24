@@ -1,4 +1,4 @@
-const CACHE_NAME = 'brown-noise-v7';
+const CACHE_NAME = 'brown-noise-v8';
 
 const STATIC_ASSETS = [
   './',

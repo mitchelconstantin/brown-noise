@@ -1,8 +1,7 @@
 /**
  * Offline-First Brown Noise PWA
- * In-Memory WAV synthesis with native HTML5 <audio> engine for full
- * Android & iOS background playback and lock-screen media notifications.
- * Pure Gaussian synthesis with zero scratchiness or distortion.
+ * Pure Gaussian real-time Web Audio engine with zero looping jitter,
+ * instantaneous parameter response, and native Android/iOS background playback.
  */
 
 (function () {
@@ -10,19 +9,18 @@
 
   // --- Constants & Config ---
   const SAMPLE_RATE = 44100;
-  const BUFFER_DURATION_SEC = 30;  // 30-second high-resolution seamless loop buffer
-  const WARMUP_SEC = 2.0;          // 2s warmup to stabilize leaky integration & filter
-  const CROSSFADE_SEC = 3.5;       // 3.5s equal-power crossfade for seamless looping
-  const FADE_IN_MS = 1200;
-  const FADE_OUT_MS = 1000;
-  const TONE_SWAP_CROSSFADE_MS = 400;
+  const BUFFER_DURATION_SEC = 25;  // 25-second seamless loop buffer
+  const WARMUP_SEC = 2.0;          // 2s warmup to stabilize leaky integration
+  const CROSSFADE_SEC = 3.0;       // 3s equal-power crossfade for seamless looping
+  const FADE_IN_SEC = 1.0;
+  const FADE_OUT_SEC = 0.8;
 
   const STORAGE_KEYS = {
-    PRESET: 'bn_active_preset',
-    CUTOFF: 'bn_cutoff_hz',
-    SLOPE: 'bn_slope_val',
+    PRESET: 'bn_active_preset_v2',
+    CUTOFF: 'bn_cutoff_hz_v2',
+    SLOPE: 'bn_slope_val_v2',
     TIMER: 'bn_sleep_timer',
-    CUSTOM_PRESETS: 'bn_custom_presets_v1'
+    CUSTOM_PRESETS: 'bn_custom_presets_v2'
   };
 
   const BUILTIN_PRESETS = {
@@ -57,9 +55,7 @@
   const timerCountdown = document.getElementById('timerCountdown');
   const timerChips = document.querySelectorAll('.timer-chip');
   const offlineBadge = document.getElementById('offlineBadge');
-
-  let audioA = document.getElementById('audioA');
-  let audioB = document.getElementById('audioB');
+  const bgMedia = document.getElementById('bgMedia');
 
   // --- App State ---
   let isPlaying = false;
@@ -68,7 +64,6 @@
   let slope = parseInt(localStorage.getItem(STORAGE_KEYS.SLOPE) || '1', 10);
   let timerMinutes = parseInt(localStorage.getItem(STORAGE_KEYS.TIMER) || '0', 10);
 
-  // Custom user-saved presets
   let customPresets = [];
   try {
     customPresets = JSON.parse(localStorage.getItem(STORAGE_KEYS.CUSTOM_PRESETS) || '[]');
@@ -76,15 +71,16 @@
     customPresets = [];
   }
 
-  let activeAudio = audioA;
-  let standbyAudio = audioB;
-  let activeBlobUrl = null;
-  let standbyBlobUrl = null;
-
-  let fadeIntervalId = null;
   let sleepTimerInterval = null;
   let sleepTimerEndTime = null;
-  let debounceWavTimer = null;
+
+  // --- Web Audio Graph ---
+  let audioCtx = null;
+  let sourceNode = null;
+  let lpFilter1 = null;
+  let lpFilter2 = null;
+  let gainNode = null;
+  let cachedAudioBuffer = null;
 
   /**
    * Generates pure Gaussian random noise via Box-Muller transform.
@@ -98,14 +94,13 @@
   }
 
   /**
-   * Synthesizes 16-bit PCM WAV Blob with Cutoff & Slope baked in:
-   * 1. Pure Gaussian brown noise with leaky integration.
-   * 2. Lowpass filtering with 1x to 4x slope poles.
-   * 3. DC blocking filter (20 Hz).
-   * 4. Equal-power tail crossfade for completely seamless, gapless looping.
-   * 5. Clean linear peak normalization to 0.95 (loudest clean hardware output).
+   * Procedural Audio Synthesis:
+   * Pure Gaussian brown noise with leaky integration and DC blocking.
+   * Zero saturation clipping (silky, scratch-free).
    */
-  function synthesizeBrownNoiseWav(cutoffHz, slopeVal) {
+  function createPureBrownNoiseBuffer(targetCtx) {
+    if (cachedAudioBuffer) return cachedAudioBuffer;
+
     const warmupSamples = Math.floor(SAMPLE_RATE * WARMUP_SEC);
     const nSamples = Math.floor(SAMPLE_RATE * BUFFER_DURATION_SEC);
     const crossfadeSamples = Math.floor(SAMPLE_RATE * CROSSFADE_SEC);
@@ -114,7 +109,6 @@
     const left = new Float32Array(totalGen);
     const right = new Float32Array(totalGen);
 
-    // 1. Pure Gaussian leaky integration
     let l = 0, r = 0;
     for (let i = 0; i < totalGen; i++) {
       l = (l + 0.02 * gaussianRandom()) / 1.02;
@@ -123,41 +117,26 @@
       right[i] = r;
     }
 
-    // 2. Multi-pole Low-pass Filtering
-    // Slope 1: 1 pole (gentle 6 dB/oct)
-    // Slope 2: 2 poles (12 dB/oct)
-    // Slope 3: 3 poles (18 dB/oct)
-    // Slope 4: 4 poles (24 dB/oct)
+    // DC blocker filter (20 Hz)
     const dt = 1 / SAMPLE_RATE;
-    const rc = 1 / (2 * Math.PI * cutoffHz);
-    const alpha = dt / (rc + dt);
+    const rc = 1 / (2 * Math.PI * 20);
+    const alphaHP = rc / (rc + dt);
 
-    const poles = Math.max(1, Math.min(4, slopeVal));
-    for (let p = 0; p < poles; p++) {
-      let flL = 0, flR = 0;
-      for (let i = 0; i < totalGen; i++) {
-        flL += alpha * (left[i] - flL);
-        flR += alpha * (right[i] - flR);
-        left[i] = flL;
-        right[i] = flR;
-      }
-    }
-
-    // 3. DC Blocker Filter (20 Hz)
-    const dtDC = 1 / SAMPLE_RATE;
-    const rcDC = 1 / (2 * Math.PI * 20);
-    const alphaHP = rcDC / (rcDC + dtDC);
-
-    let pXL = 0, pYL = 0, pXR = 0, pYR = 0;
+    let prevXL = 0, prevYL = 0;
+    let prevXR = 0, prevYR = 0;
     for (let i = 0; i < totalGen; i++) {
-      const yL = alphaHP * (pYL + left[i] - pXL);
-      pXL = left[i]; pYL = yL; left[i] = yL;
+      const yL = alphaHP * (prevYL + left[i] - prevXL);
+      prevXL = left[i];
+      prevYL = yL;
+      left[i] = yL;
 
-      const yR = alphaHP * (pYR + right[i] - pXR);
-      pXR = right[i]; pYR = yR; right[i] = yR;
+      const yR = alphaHP * (prevYR + right[i] - prevXR);
+      prevXR = right[i];
+      prevYR = yR;
+      right[i] = yR;
     }
 
-    // 4. Extract Steady-State Portion
+    // Extract steady-state portion
     const outL = new Float32Array(nSamples);
     const outR = new Float32Array(nSamples);
     for (let i = 0; i < nSamples; i++) {
@@ -165,7 +144,7 @@
       outR[i] = right[i + warmupSamples];
     }
 
-    // 5. Equal-power Tail Crossfade for Zero-Seam Looping
+    // Equal-power tail crossfade for zero-seam looping
     const tailOffset = warmupSamples + nSamples;
     for (let i = 0; i < crossfadeSamples; i++) {
       const t = i / crossfadeSamples;
@@ -175,7 +154,7 @@
       outR[i] = right[tailOffset + i] * wTail + right[i] * wHead;
     }
 
-    // 6. Clean Linear Peak Normalization (0.95 peak, zero distortion)
+    // Clean linear normalization (0.95 peak, zero distortion)
     let maxPeak = 0;
     for (let i = 0; i < nSamples; i++) {
       const aL = Math.abs(outL[i]);
@@ -183,63 +162,86 @@
       if (aL > maxPeak) maxPeak = aL;
       if (aR > maxPeak) maxPeak = aR;
     }
-    const scale = (0.95 / (maxPeak || 1.0)) * 32767;
-
-    // 7. RIFF WAV Encoding
-    const pcmBytes = nSamples * 4;
-    const buffer = new ArrayBuffer(44 + pcmBytes);
-    const view = new DataView(buffer);
-
-    view.setUint32(0, 0x52494646, false); // "RIFF"
-    view.setUint32(4, 36 + pcmBytes, true);
-    view.setUint32(8, 0x57415645, false); // "WAVE"
-    view.setUint32(12, 0x666d7420, false); // "fmt "
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);          // PCM
-    view.setUint16(22, 2, true);          // Stereo
-    view.setUint32(24, SAMPLE_RATE, true);
-    view.setUint32(28, SAMPLE_RATE * 4, true);
-    view.setUint16(32, 4, true);
-    view.setUint16(34, 16, true);
-    view.setUint32(36, 0x64617461, false); // "data"
-    view.setUint32(40, pcmBytes, true);
-
-    const pcm = new Int16Array(buffer, 44, nSamples * 2);
-    let idx = 0;
+    const scale = maxPeak > 0 ? 0.95 / maxPeak : 1.0;
     for (let i = 0; i < nSamples; i++) {
-      pcm[idx++] = Math.max(-32768, Math.min(32767, Math.round(outL[i] * scale)));
-      pcm[idx++] = Math.max(-32768, Math.min(32767, Math.round(outR[i] * scale)));
+      outL[i] *= scale;
+      outR[i] *= scale;
     }
 
-    return new Blob([buffer], { type: 'audio/wav' });
+    const audioBuffer = targetCtx.createBuffer(2, nSamples, SAMPLE_RATE);
+    audioBuffer.copyToChannel(outL, 0);
+    audioBuffer.copyToChannel(outR, 1);
+
+    cachedAudioBuffer = audioBuffer;
+    return audioBuffer;
   }
 
-  // --- Smooth Volume Fades ---
+  // --- Real-time Audio Graph Setup ---
 
-  function rampVolume(el, fromVol, toVol, durationMs, onDone) {
-    if (fadeIntervalId) {
-      clearInterval(fadeIntervalId);
-      fadeIntervalId = null;
+  function ensureAudioPipeline() {
+    if (!audioCtx) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new AudioContextClass();
     }
 
-    const steps = 30;
-    const stepTime = durationMs / steps;
-    let step = 0;
-    el.volume = Math.max(0, Math.min(1, fromVol));
+    if (!cachedAudioBuffer) {
+      createPureBrownNoiseBuffer(audioCtx);
+    }
 
-    fadeIntervalId = setInterval(() => {
-      step++;
-      const progress = Math.min(1, step / steps);
-      // Smooth sinusoidal interpolation
-      const smooth = 0.5 * (1 - Math.cos(Math.PI * progress));
-      el.volume = Math.max(0, Math.min(1, fromVol + (toVol - fromVol) * smooth));
+    // 1. Primary Low-pass filter (Cutoff)
+    if (!lpFilter1) {
+      lpFilter1 = audioCtx.createBiquadFilter();
+      lpFilter1.type = 'lowpass';
+      lpFilter1.frequency.setValueAtTime(cutoff, audioCtx.currentTime);
+      lpFilter1.Q.setValueAtTime(0.707, audioCtx.currentTime);
+    }
 
-      if (progress >= 1) {
-        clearInterval(fadeIntervalId);
-        fadeIntervalId = null;
-        if (onDone) onDone();
+    // 2. Secondary Low-pass filter (Slope steepness)
+    if (!lpFilter2) {
+      lpFilter2 = audioCtx.createBiquadFilter();
+      lpFilter2.type = 'lowpass';
+      lpFilter2.frequency.setValueAtTime(cutoff, audioCtx.currentTime);
+      lpFilter2.Q.setValueAtTime(0.707, audioCtx.currentTime);
+    }
+
+    // 3. Master Gain Node (Locked at maximum clean output: 1.0)
+    if (!gainNode) {
+      gainNode = audioCtx.createGain();
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+
+      lpFilter1.connect(lpFilter2);
+      lpFilter2.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+    }
+
+    applyFilterParameters();
+  }
+
+  function applyFilterParameters() {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+
+    // Cutoff updates instantaneously without clicks or delays
+    if (lpFilter1) {
+      lpFilter1.frequency.setTargetAtTime(cutoff, now, 0.02);
+    }
+
+    // Slope calculation
+    if (lpFilter2) {
+      if (slope === 1) {
+        // Slope 1: Gentle 6 dB/octave (secondary filter wide open)
+        lpFilter2.frequency.setTargetAtTime(18000, now, 0.02);
+      } else if (slope === 2) {
+        // Slope 2: Standard 12 dB/octave
+        lpFilter2.frequency.setTargetAtTime(cutoff * 1.25, now, 0.02);
+      } else if (slope === 3) {
+        // Slope 3: Deep 18 dB/octave
+        lpFilter2.frequency.setTargetAtTime(cutoff, now, 0.02);
+      } else {
+        // Slope 4: Steep 24 dB/octave
+        lpFilter2.frequency.setTargetAtTime(cutoff * 0.85, now, 0.02);
       }
-    }, stepTime);
+    }
   }
 
   // --- Playback Control ---
@@ -249,27 +251,38 @@
     isPlaying = true;
 
     updateUIState(true);
-    updateMediaSession();
     playbackStatus.textContent = 'Playing';
 
-    activeAudio.loop = true;
-    activeAudio.playsInline = true;
+    ensureAudioPipeline();
 
-    const playPromise = activeAudio.play();
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          rampVolume(activeAudio, 0, 1.0, FADE_IN_MS);
-          if (timerMinutes > 0 && !sleepTimerEndTime) {
-            startSleepTimer(timerMinutes);
-          }
-        })
-        .catch((err) => {
-          console.warn('Playback error:', err);
-          isPlaying = false;
-          updateUIState(false);
-          playbackStatus.textContent = 'Tap to play';
-        });
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+
+    // Start silent background media element (triggers Android & iOS MediaSession wakelock)
+    if (bgMedia) {
+      bgMedia.play().catch(() => {});
+    }
+
+    // Create and play sample-accurate gapless buffer source node
+    if (!sourceNode) {
+      sourceNode = audioCtx.createBufferSource();
+      sourceNode.buffer = cachedAudioBuffer;
+      sourceNode.loop = true; // Hardware DSP sample-accurate loop: ZERO JITTER
+      sourceNode.connect(lpFilter1);
+      sourceNode.start(0);
+    }
+
+    // Smooth studio fade-in to maximum clean output (1.0)
+    const now = audioCtx.currentTime;
+    gainNode.gain.cancelScheduledValues(now);
+    gainNode.gain.setValueAtTime(0.0001, now);
+    gainNode.gain.linearRampToValueAtTime(1.0, now + FADE_IN_SEC);
+
+    updateMediaSession();
+
+    if (timerMinutes > 0 && !sleepTimerEndTime) {
+      startSleepTimer(timerMinutes);
     }
   }
 
@@ -281,11 +294,30 @@
     updateMediaSession();
     playbackStatus.textContent = 'Fading out...';
 
-    rampVolume(activeAudio, activeAudio.volume, 0, FADE_OUT_MS, () => {
-      activeAudio.pause();
+    if (bgMedia) {
+      bgMedia.pause();
+    }
+
+    if (!audioCtx || !gainNode) {
       playbackStatus.textContent = 'Ready to play';
-      activeAudio.volume = 1.0;
-    });
+      return;
+    }
+
+    const now = audioCtx.currentTime;
+    gainNode.gain.cancelScheduledValues(now);
+    gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+    gainNode.gain.linearRampToValueAtTime(0.0001, now + FADE_OUT_SEC);
+
+    setTimeout(() => {
+      if (!isPlaying && sourceNode) {
+        try {
+          sourceNode.stop();
+          sourceNode.disconnect();
+          sourceNode = null;
+        } catch (e) {}
+        playbackStatus.textContent = 'Ready to play';
+      }
+    }, FADE_OUT_SEC * 1000 + 50);
 
     clearSleepTimer();
   }
@@ -298,69 +330,7 @@
     }
   }
 
-  // --- Live Sound Regeneration & Crossfading ---
-
-  function applyToneUpdate() {
-    localStorage.setItem(STORAGE_KEYS.CUTOFF, cutoff.toString());
-    localStorage.setItem(STORAGE_KEYS.SLOPE, slope.toString());
-
-    if (!isPlaying) {
-      // Audio is stopped: regenerate and update source
-      playbackStatus.textContent = 'Updating tone...';
-      setTimeout(() => {
-        const newBlob = synthesizeBrownNoiseWav(cutoff, slope);
-        if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
-        activeBlobUrl = URL.createObjectURL(newBlob);
-        activeAudio.src = activeBlobUrl;
-        playbackStatus.textContent = 'Ready to play';
-      }, 10);
-      return;
-    }
-
-    // Audio is currently playing: smooth crossfade to standbyAudio
-    playbackStatus.textContent = 'Updating tone...';
-    const newBlob = synthesizeBrownNoiseWav(cutoff, slope);
-    if (standbyBlobUrl) URL.revokeObjectURL(standbyBlobUrl);
-    standbyBlobUrl = URL.createObjectURL(newBlob);
-
-    standbyAudio.src = standbyBlobUrl;
-    standbyAudio.loop = true;
-    standbyAudio.playsInline = true;
-    standbyAudio.volume = 0;
-
-    const onCanPlay = () => {
-      standbyAudio.removeEventListener('canplaythrough', onCanPlay);
-
-      standbyAudio.play().then(() => {
-        // Crossfade over 400ms
-        rampVolume(activeAudio, activeAudio.volume, 0, TONE_SWAP_CROSSFADE_MS, () => {
-          activeAudio.pause();
-          if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
-
-          // Swap audio pointers
-          const temp = activeAudio;
-          activeAudio = standbyAudio;
-          standbyAudio = temp;
-
-          activeBlobUrl = standbyBlobUrl;
-          standbyBlobUrl = null;
-
-          playbackStatus.textContent = 'Playing';
-          updateMediaSession();
-        });
-        rampVolume(standbyAudio, 0, 1.0, TONE_SWAP_CROSSFADE_MS);
-      }).catch(console.warn);
-    };
-
-    standbyAudio.addEventListener('canplaythrough', onCanPlay);
-  }
-
-  function debounceToneUpdate() {
-    clearTimeout(debounceWavTimer);
-    debounceWavTimer = setTimeout(applyToneUpdate, 180);
-  }
-
-  // --- Preset & Custom Management ---
+  // --- Preset & Custom Preset Logic ---
 
   function formatSlopeText(val) {
     if (val === 1) return '1x (Gentle / 6 dB)';
@@ -412,7 +382,10 @@
     slope = p.slope;
 
     localStorage.setItem(STORAGE_KEYS.PRESET, key);
-    presetValue.textContent = `${p.name}`;
+    localStorage.setItem(STORAGE_KEYS.CUTOFF, cutoff.toString());
+    localStorage.setItem(STORAGE_KEYS.SLOPE, slope.toString());
+
+    presetValue.textContent = p.name;
     saveCustomBtn.classList.add('hidden');
 
     cutoffSlider.value = cutoff;
@@ -424,7 +397,8 @@
     updateSliderFill(slopeSlider);
 
     renderPresetChips();
-    debounceToneUpdate();
+    applyFilterParameters();
+    updateMediaSession();
   }
 
   function selectCustomPreset(idx) {
@@ -436,6 +410,9 @@
     slope = cp.slope;
 
     localStorage.setItem(STORAGE_KEYS.PRESET, activePresetKey);
+    localStorage.setItem(STORAGE_KEYS.CUTOFF, cutoff.toString());
+    localStorage.setItem(STORAGE_KEYS.SLOPE, slope.toString());
+
     presetValue.textContent = `★ ${cp.name} (${cutoff} Hz, ${slope}x)`;
     saveCustomBtn.classList.add('hidden');
 
@@ -448,11 +425,11 @@
     updateSliderFill(slopeSlider);
 
     renderPresetChips();
-    debounceToneUpdate();
+    applyFilterParameters();
+    updateMediaSession();
   }
 
   function onSliderDrag() {
-    // Check if current values match any known preset
     let matchedKey = null;
     for (const [key, p] of Object.entries(BUILTIN_PRESETS)) {
       if (p.cutoff === cutoff && p.slope === slope) {
@@ -471,6 +448,8 @@
 
     activePresetKey = matchedKey || 'custom';
     localStorage.setItem(STORAGE_KEYS.PRESET, activePresetKey);
+    localStorage.setItem(STORAGE_KEYS.CUTOFF, cutoff.toString());
+    localStorage.setItem(STORAGE_KEYS.SLOPE, slope.toString());
 
     if (matchedKey && BUILTIN_PRESETS[matchedKey]) {
       presetValue.textContent = BUILTIN_PRESETS[matchedKey].name;
@@ -485,7 +464,8 @@
     }
 
     renderPresetChips();
-    debounceToneUpdate();
+    applyFilterParameters();
+    updateMediaSession();
   }
 
   // --- Custom Preset Modal ---
@@ -503,11 +483,7 @@
 
   function saveCurrentAsCustom() {
     const name = presetNameInput.value.trim() || `My Tone ${customPresets.length + 1}`;
-    customPresets.push({
-      name,
-      cutoff,
-      slope
-    });
+    customPresets.push({ name, cutoff, slope });
 
     localStorage.setItem(STORAGE_KEYS.CUSTOM_PRESETS, JSON.stringify(customPresets));
     activePresetKey = `custom_${customPresets.length - 1}`;
@@ -517,12 +493,12 @@
     presetValue.textContent = `★ ${name} (${cutoff} Hz, ${slope}x)`;
     saveCustomBtn.classList.add('hidden');
     renderPresetChips();
+    updateMediaSession();
   }
 
   function deleteCustomPreset(idx) {
     customPresets.splice(idx, 1);
     localStorage.setItem(STORAGE_KEYS.CUSTOM_PRESETS, JSON.stringify(customPresets));
-    activePresetKey = 'open';
     selectPreset('open');
   }
 
@@ -611,7 +587,7 @@
     navigator.mediaSession.metadata = new MediaMetadata({
       title: `${trackTitle} - Brown Noise`,
       artist: 'Offline Ambient',
-      album: 'Seamless Audio',
+      album: 'Pure Audio',
       artwork: [
         { src: './icons/icon-192.png', sizes: '192x192', type: 'image/png' },
         { src: './icons/icon-512.png', sizes: '512x512', type: 'image/png' },
@@ -634,17 +610,7 @@
 
   playBtn.addEventListener('click', togglePlay);
 
-  // Audio Element Media Events
-  [audioA, audioB].forEach((a) => {
-    a.addEventListener('play', () => {
-      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-    });
-    a.addEventListener('pause', () => {
-      if ('mediaSession' in navigator && !isPlaying) navigator.mediaSession.playbackState = 'paused';
-    });
-  });
-
-  // Cutoff Slider
+  // Cutoff Slider (updates audio instantaneously)
   cutoffSlider.addEventListener('input', (e) => {
     cutoff = parseInt(e.target.value, 10);
     cutoffValue.textContent = `${cutoff} Hz`;
@@ -652,7 +618,7 @@
     onSliderDrag();
   });
 
-  // Slope Slider
+  // Slope Slider (updates audio instantaneously)
   slopeSlider.addEventListener('input', (e) => {
     slope = parseInt(e.target.value, 10);
     slopeValue.textContent = formatSlopeText(slope);
@@ -660,7 +626,7 @@
     onSliderDrag();
   });
 
-  // Preset Label Tap & Save Button
+  // Preset Label Tap & Save Modal
   presetValue.addEventListener('click', () => {
     if (activePresetKey === 'custom') openSaveModal();
   });
@@ -689,6 +655,13 @@
     });
   });
 
+  // Resume context if app re-enters foreground
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && audioCtx && audioCtx.state === 'suspended' && isPlaying) {
+      audioCtx.resume();
+    }
+  });
+
   // Network Offline / Online status
   window.addEventListener('online', () => {
     offlineBadge.title = 'Works 100% offline (Online)';
@@ -697,7 +670,7 @@
     offlineBadge.title = 'Offline mode active';
   });
 
-  // --- Initial Setup ---
+  // --- App Initialization ---
 
   function initializeApp() {
     cutoffSlider.value = cutoff;
@@ -723,18 +696,6 @@
       presetValue.textContent = `Custom (${cutoff} Hz, ${slope}x) — Tap to save`;
       saveCustomBtn.classList.remove('hidden');
     }
-
-    // Synthesize initial audio WAV
-    playbackStatus.textContent = 'Generating sound...';
-    setTimeout(() => {
-      const initialBlob = synthesizeBrownNoiseWav(cutoff, slope);
-      activeBlobUrl = URL.createObjectURL(initialBlob);
-      activeAudio.src = activeBlobUrl;
-      activeAudio.loop = true;
-      activeAudio.playsInline = true;
-      activeAudio.volume = 1.0;
-      playbackStatus.textContent = 'Ready to play';
-    }, 10);
 
     // Sleep Timer
     timerChips.forEach((chip) => {

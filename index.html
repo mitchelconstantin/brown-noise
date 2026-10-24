@@ -68,8 +68,6 @@
         <span class="status-label" id="playbackStatus">Ready to play</span>
       </div>
 
-      <!-- Sliders Section -->
-      <section class="controls-section">
       <!-- Controls Section -->
       <section class="controls-section">
         <!-- Preset Selector -->
@@ -178,9 +176,8 @@
     </div>
   </div>
 
-  <!-- Audio elements managed dynamically in app.js -->
-  <audio id="audioA" loop playsinline webkit-playsinline preload="auto"></audio>
-  <audio id="audioB" loop playsinline webkit-playsinline preload="auto"></audio>
+  <!-- Background media session anchor for Android & iOS -->
+  <audio id="bgMedia" loop playsinline webkit-playsinline preload="auto" src="data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABmYXRhAAAAAA=="></audio>
 
   <script src="./app.js"></script>
 </body>
