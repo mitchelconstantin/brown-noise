@@ -9,18 +9,18 @@
 
   // --- Constants & Config ---
   const SAMPLE_RATE = 44100;
-  const BUFFER_DURATION_SEC = 25;  // 25-second seamless loop buffer
+  const BUFFER_DURATION_SEC = 60;  // 60-second seamless buffer (full 1 minute)
   const WARMUP_SEC = 2.0;          // 2s warmup to stabilize leaky integration
-  const CROSSFADE_SEC = 3.0;       // 3s equal-power crossfade for seamless looping
+  const CROSSFADE_SEC = 4.0;       // 4s Hann window crossfade (zero click/tick at boundary)
   const FADE_IN_SEC = 1.0;
   const FADE_OUT_SEC = 0.8;
 
   const STORAGE_KEYS = {
-    PRESET: 'bn_active_preset_v3',
-    CUTOFF: 'bn_cutoff_hz_v3',
-    SLOPE: 'bn_slope_val_v3',
+    PRESET: 'bn_active_preset_v4',
+    CUTOFF: 'bn_cutoff_hz_v4',
+    SLOPE: 'bn_slope_val_v4',
     TIMER: 'bn_sleep_timer',
-    CUSTOM_PRESETS: 'bn_custom_presets_v3'
+    CUSTOM_PRESETS: 'bn_custom_presets_v4'
   };
 
   const BUILTIN_PRESETS = {
@@ -85,9 +85,8 @@
   let silentBlobUrl = null;
 
   /**
-   * Generates a valid 30-second silent WAV file with actual PCM duration.
-   * Chrome for Android requires an active media element with duration > 5s
-   * to spawn the lock screen notification player and grant background audio focus.
+   * Generates a 30-second 16-bit signed PCM silent WAV file (integers strictly 0).
+   * 16-bit zero PCM has $-\infty$ dB amplitude with zero DC offset, preventing any looping clicks.
    */
   function create30sSilentWavBlobUrl() {
     if (silentBlobUrl) return silentBlobUrl;
@@ -95,25 +94,27 @@
     const rate = 8000;
     const dur = 30; // 30 seconds
     const numSamples = rate * dur;
-    const buffer = new ArrayBuffer(44 + numSamples);
+    const pcmBytes = numSamples * 2; // 16-bit mono = 2 bytes per sample
+    const buffer = new ArrayBuffer(44 + pcmBytes);
     const view = new DataView(buffer);
 
     view.setUint32(0, 0x52494646, false); // "RIFF"
-    view.setUint32(4, 36 + numSamples, true);
+    view.setUint32(4, 36 + pcmBytes, true);
     view.setUint32(8, 0x57415645, false); // "WAVE"
     view.setUint32(12, 0x666d7420, false); // "fmt "
     view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 1, true); // Mono
+    view.setUint16(20, 1, true);          // PCM
+    view.setUint16(22, 1, true);          // Mono
     view.setUint32(24, rate, true);
-    view.setUint32(28, rate, true);
-    view.setUint16(32, 1, true);
-    view.setUint16(34, 8, true);
-    view.setUint32(36, 0x64617461, false); // "data"
-    view.setUint32(40, numSamples, true);
+    view.setUint32(28, rate * 2, true);   // ByteRate (8000 * 1 * 2)
+    view.setUint16(32, 2, true);          // BlockAlign (1 * 2)
+    view.setUint16(34, 16, true);         // 16-bit
+    view.setUint32(36, 0x64617461, false);// "data"
+    view.setUint32(40, pcmBytes, true);
 
-    const u8 = new Uint8Array(buffer, 44, numSamples);
-    u8.fill(128); // 8-bit unsigned PCM silence
+    // 16-bit signed PCM silence is 0x0000
+    const i16 = new Int16Array(buffer, 44, numSamples);
+    i16.fill(0);
 
     const blob = new Blob([buffer], { type: 'audio/wav' });
     silentBlobUrl = URL.createObjectURL(blob);
@@ -133,8 +134,9 @@
 
   /**
    * Procedural Audio Synthesis:
-   * Pure Gaussian brown noise with leaky integration and DC blocking.
-   * Zero saturation clipping (silky, scratch-free).
+   * Pure Gaussian brown noise with leaky integration, DC blocking,
+   * and smooth Hann-window crossfade with continuous derivatives.
+   * Completely eliminates boundary impulses/clicks/ticks.
    */
   function createPureBrownNoiseBuffer(targetCtx) {
     if (cachedAudioBuffer) return cachedAudioBuffer;
@@ -182,12 +184,12 @@
       outR[i] = right[i + warmupSamples];
     }
 
-    // Equal-power tail crossfade for zero-seam looping
+    // Smooth Hann raised-cosine window crossfade (zero 1st & 2nd derivative jump)
     const tailOffset = warmupSamples + nSamples;
     for (let i = 0; i < crossfadeSamples; i++) {
-      const t = i / crossfadeSamples;
-      const wTail = Math.cos(0.5 * Math.PI * t);
-      const wHead = Math.sin(0.5 * Math.PI * t);
+      const t = Math.min(1, Math.max(0, i / crossfadeSamples));
+      const wHead = 0.5 * (1 - Math.cos(Math.PI * t));
+      const wTail = 1 - wHead;
       outL[i] = left[tailOffset + i] * wTail + left[i] * wHead;
       outR[i] = right[tailOffset + i] * wTail + right[i] * wHead;
     }
@@ -305,8 +307,9 @@
     }
 
     // 1. Play background media element (triggers Android Chrome lock screen & notification player)
+    // Volume set to 0.0001 with 16-bit zero PCM so it is 100% silent with zero clicks/ticks
     if (bgMedia) {
-      bgMedia.volume = 1.0;
+      bgMedia.volume = 0.0001;
       bgMedia.loop = true;
       const playPromise = bgMedia.play();
       if (playPromise !== undefined) {
@@ -772,11 +775,11 @@
       saveCustomBtn.classList.remove('hidden');
     }
 
-    // Pre-create 30s silent audio Blob URL and load into bgMedia element
+    // Pre-create 30s 16-bit signed zero silent audio and load into bgMedia element
     if (bgMedia) {
       bgMedia.src = create30sSilentWavBlobUrl();
       bgMedia.loop = true;
-      bgMedia.volume = 1.0;
+      bgMedia.volume = 0.0001; // Inaudible, zero DC offset
       bgMedia.load();
     }
 

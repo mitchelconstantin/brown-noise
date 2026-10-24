@@ -277,20 +277,49 @@ html, body {
   height: 100%;
 }
 
-.icon-play,
-.icon-stop {
+.icon-play {
   width: 44px;
   height: 44px;
   color: var(--color-text-primary);
+  transform: translateX(3px); /* Optical center compensation */
   transition: transform var(--transition-fast), color var(--transition-fast);
 }
 
-.icon-play {
-  transform: translateX(3px); /* Optical center compensation */
+.logo-playing-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 58px;
+  pointer-events: none;
 }
 
-.visualizer-container.playing .icon-stop {
-  color: var(--color-accent-light);
+.playing-logo-svg {
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 0 10px rgba(212, 155, 106, 0.65));
+}
+
+/* Subtle organic breathing wave animation on the bars while playing */
+.visualizer-container.playing .bar-1 { animation: waveBar 2.2s ease-in-out infinite alternate; }
+.visualizer-container.playing .bar-2 { animation: waveBar 2.7s ease-in-out infinite 0.2s alternate; }
+.visualizer-container.playing .bar-3 { animation: waveBar 3.1s ease-in-out infinite 0.4s alternate; }
+.visualizer-container.playing .bar-4 { animation: waveBar 2.4s ease-in-out infinite 0.1s alternate; }
+.visualizer-container.playing .bar-5 { animation: waveBar 2.9s ease-in-out infinite 0.3s alternate; }
+.visualizer-container.playing .bar-6 { animation: waveBar 2.3s ease-in-out infinite 0.5s alternate; }
+.visualizer-container.playing .bar-7 { animation: waveBar 2.5s ease-in-out infinite 0.2s alternate; }
+
+@keyframes waveBar {
+  0% {
+    transform: scaleY(0.85);
+    transform-origin: 50% 50%;
+    opacity: 0.85;
+  }
+  100% {
+    transform: scaleY(1.12);
+    transform-origin: 50% 50%;
+    opacity: 1;
+  }
 }
 
 .hidden {

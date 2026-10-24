@@ -55,10 +55,27 @@
             <svg class="icon-play" id="iconPlay" viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5.14v13.72a1 1 0 0 0 1.54.84l11-6.86a1 1 0 0 0 0-1.68L9.54 4.3A1 1 0 0 0 8 5.14z"/>
             </svg>
-            <!-- Stop / Pause Icon -->
-            <svg class="icon-stop hidden" id="iconStop" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2.5" />
-            </svg>
+            <!-- Sound Wave Logo (Playing State / Tap to Stop) -->
+            <div class="logo-playing-icon hidden" id="iconStop" aria-hidden="true" title="Playing - Tap to stop">
+              <svg class="playing-logo-svg" viewBox="0 0 512 512" fill="none">
+                <defs>
+                  <linearGradient id="logoBarGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stop-color="#FFF1E5" />
+                    <stop offset="40%" stop-color="#D49B6A" />
+                    <stop offset="100%" stop-color="#C88A55" />
+                  </linearGradient>
+                </defs>
+                <g fill="url(#logoBarGrad)">
+                  <rect class="bar bar-1" x="130" y="184" width="22" height="144" rx="11" />
+                  <rect class="bar bar-2" x="168" y="128" width="22" height="256" rx="11" />
+                  <rect class="bar bar-3" x="206" y="72" width="22" height="368" rx="11" />
+                  <rect class="bar bar-4" x="245" y="25" width="22" height="462" rx="11" />
+                  <rect class="bar bar-5" x="284" y="90" width="22" height="332" rx="11" />
+                  <rect class="bar bar-6" x="322" y="141" width="22" height="230" rx="11" />
+                  <rect class="bar bar-7" x="360" y="192" width="22" height="128" rx="11" />
+                </g>
+              </svg>
+            </div>
           </div>
         </button>
       </div>
