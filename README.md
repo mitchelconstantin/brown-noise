@@ -10,15 +10,15 @@ Designed with an espresso and warm amber dark aesthetic, it runs 100% offline wi
 
 * **Zero Dependencies & No CDNs:** Pure HTML5, CSS3, and modern vanilla JavaScript. No npm packages, no build steps, no Google Fonts, no external icons, and no remote audio files.
 * **iOS Background Playback Safe:** Avoids live `AudioContext` pipelines which iOS Safari suspends when locked or backgrounded. Instead, procedurally generates a seamless 16-bit stereo `.wav` file into an in-memory `Blob` and feeds standard HTML5 `<audio loop playsinline>`.
-* **5 Acoustically Tuned Noise Profiles:** Choose from five distinct organic sound profiles designed to sound loud and full-bodied on phone speakers without shrill high frequencies:
-  * **Cabin (Airplane Cabin):** Deep cruising Boeing 787 airflow roar. Maximum soothing presence on smartphone speakers.
-  * **Waterfall (Dark Waterfall):** Dense, full-bodied roaring torrent with heavy low-mid acoustic energy.
-  * **Downpour (Warm Downpour):** Continuous gentle rain on a roof. Mellow, enveloping mid-frequencies.
-  * **Ocean (Ocean Surf):** Deep rolling ocean surf with warm, rhythmic body.
-  * **Classic (Pure Sub-Rumble):** Pure -6 dB/octave brown noise for sub-bass lovers and headphones.
-* **Seamless Gapless Looping:** Sample-accurate loop architecture with a 30-second high-resolution stereo buffer, DC-blocker filtering, and an equal-power crossfade between the end and beginning of the audio buffer, producing zero clicks, pops, or looping skips.
-* **Warmth & Tone Filtering:** One-pole low-pass filter dynamically adjustable from deep rumble (120 Hz) to gentle mellow brown noise (750 Hz max), completely eliminating shrill high-frequency hiss.
-* **Loud & Immersive Sound:** Optimized RMS loudness normalization (~ -10 dBFS) paired with transparent soft-knee saturation for loud, rich presence without distortion even at max volume.
+* **Interactive Sound Sculpting Studio:** Real-time parameter controls allowing you to customize and audition the exact frequency response that sounds best through your phone speakers:
+  * **1. Tone Cutoff:** (80 Hz to 1200 Hz) Controls the upper frequency boundary.
+  * **2. Filter Slope:** (1x Gentle to 4x Steep) Sets the steepness of high-frequency attenuation.
+  * **3. Low Rumble:** (-10 dB to +12 dB) Sets sub-bass & low shelf weight at 140 Hz.
+  * **4. Mid Body (Phone Loudness):** (-6 dB to +14 dB) Boosts the 450 Hz resonant presence where smartphone speakers project loudly without harshness.
+  * **5. Volume:** (0% to 100%) Master clean output gain.
+  * **1-Tap Config Export:** Live configuration display box with a 1-tap "Copy Configuration" button to easily share favorite configurations.
+* **Pure Gaussian Noise Synthesis:** Employs the Box-Muller transform for true Gaussian noise with zero synthetic distortion, grain, or scratchiness.
+* **Seamless Gapless Looping:** Sample-accurate loop architecture with a 25-second high-resolution stereo buffer, DC-blocker filtering, and an equal-power crossfade between the end and beginning of the audio buffer, producing zero clicks, pops, or looping skips.
 * **Live Tone Crossfading:** Adjusting the Warmth slider while playing triggers a smooth dual-audio crossfade so the tone shifts seamlessly without dropouts or audio glitches.
 * **Studio Smooth Fades:**
   * **Play:** 1500ms smooth volume ramp up.

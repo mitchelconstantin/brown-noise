@@ -58,15 +58,18 @@ html, body {
 .app-container {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   width: 100%;
-  height: 100dvh;
+  min-height: 100dvh;
   max-width: 480px;
   margin: 0 auto;
-  padding: calc(16px + env(safe-area-inset-top)) 20px calc(16px + env(safe-area-inset-bottom)) 20px;
+  padding: calc(16px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom)) 20px;
   background: radial-gradient(circle at 50% 35%, var(--color-bg-radial) 0%, var(--color-bg-deep) 100%);
   position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ==========================================================================
@@ -130,9 +133,9 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   flex: 1;
-  max-height: calc(100dvh - 120px);
+  margin-bottom: 16px;
 }
 
 .visualizer-container {
@@ -443,49 +446,58 @@ html, body {
 }
 
 /* ==========================================================================
-   Sound Profile Selector
+   Configuration Display & Copy Button
    ========================================================================== */
-.profile-section {
+.config-box {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.profile-chips {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 6px;
-}
-
-.profile-chip {
-  background: #1e1713;
+  gap: 10px;
+  background-color: rgba(22, 17, 14, 0.65);
   border: 1px solid var(--color-surface-border);
-  color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
-  padding: 8px 2px;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.config-display {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.74rem;
-  font-weight: 600;
-  cursor: pointer;
-  outline: none;
-  text-align: center;
-  transition: all var(--transition-fast);
-  touch-action: manipulation;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.4;
+  color: var(--color-accent-light);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
 }
 
-.profile-chip:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-
-.profile-chip.active {
+.config-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
   background: linear-gradient(135deg, var(--color-accent-light), var(--color-accent));
-  border-color: var(--color-accent-light);
   color: #16110e;
+  border: none;
+  font-size: 0.82rem;
   font-weight: 700;
-  box-shadow: 0 2px 8px var(--color-accent-glow);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 10px var(--color-accent-glow);
+  touch-action: manipulation;
+}
+
+.config-copy-btn:hover {
+  filter: brightness(1.08);
+}
+
+.config-copy-btn:active {
+  transform: scale(0.98);
+}
+
+.copy-icon {
+  width: 16px;
+  height: 16px;
 }
 
 /* ==========================================================================
