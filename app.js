@@ -16,11 +16,11 @@
   const FADE_OUT_SEC = 0.8;
 
   const STORAGE_KEYS = {
-    PRESET: 'bn_active_preset_v2',
-    CUTOFF: 'bn_cutoff_hz_v2',
-    SLOPE: 'bn_slope_val_v2',
+    PRESET: 'bn_active_preset_v3',
+    CUTOFF: 'bn_cutoff_hz_v3',
+    SLOPE: 'bn_slope_val_v3',
     TIMER: 'bn_sleep_timer',
-    CUSTOM_PRESETS: 'bn_custom_presets_v2'
+    CUSTOM_PRESETS: 'bn_custom_presets_v3'
   };
 
   const BUILTIN_PRESETS = {
@@ -81,6 +81,43 @@
   let lpFilter2 = null;
   let gainNode = null;
   let cachedAudioBuffer = null;
+  let silentBlobUrl = null;
+
+  /**
+   * Generates a valid 5-second silent WAV file with actual PCM samples and duration.
+   * Android Chrome inspects audio duration to create the system notification player
+   * and grant the background audio wakelock.
+   */
+  function createSilentWavBlobUrl() {
+    if (silentBlobUrl) return silentBlobUrl;
+
+    const rate = 8000;
+    const dur = 5;
+    const numSamples = rate * dur;
+    const buffer = new ArrayBuffer(44 + numSamples);
+    const view = new DataView(buffer);
+
+    view.setUint32(0, 0x52494646, false); // "RIFF"
+    view.setUint32(4, 36 + numSamples, true);
+    view.setUint32(8, 0x57415645, false); // "WAVE"
+    view.setUint32(12, 0x666d7420, false); // "fmt "
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // Mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate, true);
+    view.setUint16(32, 1, true);
+    view.setUint16(34, 8, true);
+    view.setUint32(36, 0x64617461, false); // "data"
+    view.setUint32(40, numSamples, true);
+
+    const u8 = new Uint8Array(buffer, 44, numSamples);
+    u8.fill(128); // 8-bit unsigned PCM silence
+
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    silentBlobUrl = URL.createObjectURL(blob);
+    return silentBlobUrl;
+  }
 
   /**
    * Generates pure Gaussian random noise via Box-Muller transform.
@@ -96,7 +133,7 @@
   /**
    * Procedural Audio Synthesis:
    * Pure Gaussian brown noise with leaky integration and DC blocking.
-   * Zero saturation clipping (silky, scratch-free).
+   * Completely linear synthesis with zero saturation clipping (silky, scratch-free).
    */
   function createPureBrownNoiseBuffer(targetCtx) {
     if (cachedAudioBuffer) return cachedAudioBuffer;
@@ -182,6 +219,13 @@
     if (!audioCtx) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       audioCtx = new AudioContextClass();
+
+      // Guard against Android / iOS background context suspension
+      audioCtx.onstatechange = () => {
+        if (isPlaying && audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+      };
     }
 
     if (!cachedAudioBuffer) {
@@ -259,9 +303,14 @@
       audioCtx.resume();
     }
 
-    // Start silent background media element (triggers Android & iOS MediaSession wakelock)
+    // Start background media element with valid silent WAV
     if (bgMedia) {
-      bgMedia.play().catch(() => {});
+      if (!bgMedia.src || bgMedia.src.startsWith('data:audio/wav;base64,UklGRjIAAAB')) {
+        bgMedia.src = createSilentWavBlobUrl();
+      }
+      bgMedia.loop = true;
+      bgMedia.volume = 1.0;
+      bgMedia.play().catch(console.warn);
     }
 
     // Create and play sample-accurate gapless buffer source node
@@ -584,14 +633,17 @@
       trackTitle = `Custom (${cutoff} Hz)`;
     }
 
+    // Android Chrome requires fully-qualified absolute URLs for artwork
+    const icon192 = new URL('./icons/icon-192.png', window.location.href).href;
+    const icon512 = new URL('./icons/icon-512.png', window.location.href).href;
+
     navigator.mediaSession.metadata = new MediaMetadata({
       title: `${trackTitle} - Brown Noise`,
       artist: 'Offline Ambient',
       album: 'Pure Audio',
       artwork: [
-        { src: './icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-        { src: './icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-        { src: './icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
+        { src: icon192, sizes: '192x192', type: 'image/png' },
+        { src: icon512, sizes: '512x512', type: 'image/png' }
       ]
     });
 
@@ -655,9 +707,9 @@
     });
   });
 
-  // Resume context if app re-enters foreground
+  // Keep AudioContext resumed whenever visibility changes or state shifts
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && audioCtx && audioCtx.state === 'suspended' && isPlaying) {
+    if (isPlaying && audioCtx && audioCtx.state === 'suspended') {
       audioCtx.resume();
     }
   });
@@ -696,6 +748,9 @@
       presetValue.textContent = `Custom (${cutoff} Hz, ${slope}x) — Tap to save`;
       saveCustomBtn.classList.remove('hidden');
     }
+
+    // Pre-create silent audio Blob URL
+    createSilentWavBlobUrl();
 
     // Sleep Timer
     timerChips.forEach((chip) => {
