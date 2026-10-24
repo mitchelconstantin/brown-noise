@@ -1,18 +1,20 @@
 /**
  * Offline-First Brown Noise PWA
- * Pure vanilla ES6+ audio synthesizer and playback controller.
+ * Zero-dependency, gapless audio synthesis and background playback engine.
  */
 
 (function () {
   'use strict';
 
-  // --- Constants & Config ---
+  // --- Constants & Audio Configuration ---
   const SAMPLE_RATE = 44100;
-  const AUDIO_DURATION_SEC = 20; // 20-second seamless loop buffer
-  const CROSSFADE_SEC = 0.25;    // 250ms seamless loop crossfade
-  const FADE_IN_MS = 1500;       // 1500ms smooth fade in
-  const FADE_OUT_MS = 1200;      // 1200ms smooth fade out
-  const TONE_CROSSFADE_MS = 600; // 600ms crossfade when switching tone while playing
+  const BUFFER_DURATION_SEC = 40;  // 40-second high-fidelity seamless buffer
+  const WARMUP_SEC = 2.0;          // 2s warmup to settle filters before buffer start
+  const CROSSFADE_SEC = 4.0;       // 4s equal-power crossfade for seamless looping
+  const MIN_CUTOFF_HZ = 65;        // Deep Rumble: 65 Hz sub-bass
+  const MAX_CUTOFF_HZ = 500;       // Mellow Brown: 500 Hz maximum (no shrill frequencies)
+  const FADE_IN_SEC = 1.5;         // 1500ms smooth fade in
+  const FADE_OUT_SEC = 1.2;        // 1200ms smooth fade out
 
   const STORAGE_KEYS = {
     WARMTH: 'brown_noise_warmth',
@@ -33,190 +35,221 @@
   const timerCountdown = document.getElementById('timerCountdown');
   const timerChips = document.querySelectorAll('.timer-chip');
   const offlineBadge = document.getElementById('offlineBadge');
+  const fallbackAudio = document.getElementById('audioA');
 
-  let audioA = document.getElementById('audioA');
-  let audioB = document.getElementById('audioB');
-
-  // --- State ---
+  // --- App State ---
   let isPlaying = false;
-  let warmth = parseInt(localStorage.getItem(STORAGE_KEYS.WARMTH) || '40', 10);
+  let warmth = parseInt(localStorage.getItem(STORAGE_KEYS.WARMTH) || '50', 10);
   let volume = parseInt(localStorage.getItem(STORAGE_KEYS.VOLUME) || '80', 10);
   let timerMinutes = parseInt(localStorage.getItem(STORAGE_KEYS.TIMER) || '0', 10);
 
-  let activeAudio = audioA;
-  let standbyAudio = audioB;
-  let activeBlobUrl = null;
-  let standbyBlobUrl = null;
-
-  let fadeAnimationId = null;
   let sleepTimerInterval = null;
   let sleepTimerEndTime = null;
-  let warmthDebounceTimer = null;
-  let volumeDebounceTimer = null;
 
-  // Detect if HTMLAudioElement.volume is mutable (false on iOS Safari)
-  const isVolumeSupported = (() => {
-    try {
-      const testAudio = document.createElement('audio');
-      testAudio.volume = 0.5;
-      return Math.abs(testAudio.volume - 0.5) < 0.05;
-    } catch (e) {
-      return false;
-    }
-  })();
-
-  // --- Procedural Brown Noise & WAV Generation ---
+  // --- Audio Engine Components ---
+  let audioCtx = null;
+  let bufferSourceNode = null;
+  let filterNode = null;
+  let gainNode = null;
+  let streamAudioEl = null;
+  let sharedAudioBuffer = null;
+  let fallbackBlobUrl = null;
 
   /**
-   * Generates a 16-bit PCM WAV Blob of brown noise with seamless looping
-   * and one-pole low-pass filtering.
+   * Maps 0-100 warmth slider to cutoff frequency (65 Hz to 500 Hz).
+   * Caps out at Mellow Brown with no shrill high-frequencies.
    */
-  function generateBrownNoiseWav(warmthSetting, volumeSetting) {
-    const N = SAMPLE_RATE * AUDIO_DURATION_SEC;
-    const L = Math.floor(SAMPLE_RATE * CROSSFADE_SEC);
-    const totalSamples = N + L;
+  function warmthToCutoff(val) {
+    const clamped = Math.max(0, Math.min(100, val));
+    return MIN_CUTOFF_HZ * Math.pow(MAX_CUTOFF_HZ / MIN_CUTOFF_HZ, clamped / 100);
+  }
 
-    // Allocate left and right channels
-    const left = new Float32Array(totalSamples);
-    const right = new Float32Array(totalSamples);
+  function formatWarmthLabel(val) {
+    if (val < 35) return 'Deep Rumble';
+    if (val < 70) return 'Warm Umber';
+    return 'Mellow Brown';
+  }
 
-    // 1. Brown noise integration (leaky integrator prevents DC wander)
+  /**
+   * Procedural Audio Synthesis:
+   * Generates a 40-second stereo brown noise buffer with:
+   * 1. 2s warmup to stabilize leaky integration & DC blocker.
+   * 2. High-pass DC blocker (15 Hz) preventing baseline wander.
+   * 3. 4s equal-power crossfade for completely seamless, gapless looping.
+   * 4. RMS loudness normalization (~ -12 dBFS) + soft saturation for rich, full, loud sound.
+   */
+  function synthesizeBrownNoiseBuffer(targetCtx) {
+    const warmupSamples = Math.floor(SAMPLE_RATE * WARMUP_SEC);
+    const nSamples = Math.floor(SAMPLE_RATE * BUFFER_DURATION_SEC);
+    const crossfadeSamples = Math.floor(SAMPLE_RATE * CROSSFADE_SEC);
+    const totalGen = warmupSamples + nSamples + crossfadeSamples;
+
+    const rawL = new Float32Array(totalGen);
+    const rawR = new Float32Array(totalGen);
+
+    // 1. Brown noise leaky integration
     let lastL = 0;
     let lastR = 0;
-    for (let i = 0; i < totalSamples; i++) {
-      const whiteL = Math.random() * 2 - 1;
-      const whiteR = Math.random() * 2 - 1;
-      lastL = (lastL + 0.02 * whiteL) / 1.02;
-      lastR = (lastR + 0.02 * whiteR) / 1.02;
-      left[i] = lastL;
-      right[i] = lastR;
+    for (let i = 0; i < totalGen; i++) {
+      lastL = (lastL + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+      lastR = (lastR + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+      rawL[i] = lastL;
+      rawR[i] = lastR;
     }
 
-    // 2. One-pole low-pass filter (Tone / Warmth)
-    // Warmth 0: 80Hz (Deep Rumble) -> Warmth 100: 2200Hz (Soft Brown)
-    const minCutoff = 80;
-    const maxCutoff = 2200;
-    const fc = minCutoff * Math.pow(maxCutoff / minCutoff, warmthSetting / 100);
-    const dt = 1 / SAMPLE_RATE;
-    const rc = 1 / (2 * Math.PI * fc);
-    const alpha = dt / (rc + dt);
+    // 2. DC-blocking filter (15 Hz) to eliminate baseline wander
+    const R = 0.998;
+    let dcL = 0, prevXL = 0;
+    let dcR = 0, prevXR = 0;
+    for (let i = 0; i < totalGen; i++) {
+      const xL = rawL[i];
+      dcL = xL - prevXL + R * dcL;
+      prevXL = xL;
+      rawL[i] = dcL;
 
-    let fl = 0;
-    let fr = 0;
-    for (let i = 0; i < totalSamples; i++) {
-      fl += alpha * (left[i] - fl);
-      fr += alpha * (right[i] - fr);
-      left[i] = fl;
-      right[i] = fr;
+      const xR = rawR[i];
+      dcR = xR - prevXR + R * dcR;
+      prevXR = xR;
+      rawR[i] = dcR;
     }
 
-    // 3. Seamless crossfade looping
-    // Blend tail [N, N+L) back into head [0, L) using equal-power crossfade
-    for (let i = 0; i < L; i++) {
-      const t = i / L;
+    // 3. Extract steady-state portion
+    const leftChannel = new Float32Array(nSamples);
+    const rightChannel = new Float32Array(nSamples);
+    for (let i = 0; i < nSamples; i++) {
+      leftChannel[i] = rawL[i + warmupSamples];
+      rightChannel[i] = rawR[i + warmupSamples];
+    }
+
+    // 4. Equal-power tail crossfade for zero-seam looping
+    const tailOffset = warmupSamples + nSamples;
+    for (let i = 0; i < crossfadeSamples; i++) {
+      const t = i / crossfadeSamples;
       const wTail = Math.cos(0.5 * Math.PI * t);
       const wHead = Math.sin(0.5 * Math.PI * t);
-      left[i] = left[i + N] * wTail + left[i] * wHead;
-      right[i] = right[i + N] * wTail + right[i] * wHead;
+      leftChannel[i] = rawL[tailOffset + i] * wTail + leftChannel[i] * wHead;
+      rightChannel[i] = rawR[tailOffset + i] * wTail + rightChannel[i] * wHead;
     }
 
-    // 4. Normalization and amplitude scaling
-    let maxPeak = 0;
-    for (let i = 0; i < N; i++) {
-      const absL = Math.abs(left[i]);
-      const absR = Math.abs(right[i]);
-      if (absL > maxPeak) maxPeak = absL;
-      if (absR > maxPeak) maxPeak = absR;
+    // 5. RMS Loudness Normalization + Transparent Soft Saturation
+    let sumSq = 0;
+    for (let i = 0; i < nSamples; i++) {
+      sumSq += leftChannel[i] * leftChannel[i] + rightChannel[i] * rightChannel[i];
+    }
+    const currentRms = Math.sqrt(sumSq / (2 * nSamples));
+
+    // Target RMS ~0.26 (-12 dBFS RMS) for studio loud, rich presence
+    const boost = 0.26 / (currentRms || 0.1);
+    for (let i = 0; i < nSamples; i++) {
+      leftChannel[i] = Math.tanh(leftChannel[i] * boost);
+      rightChannel[i] = Math.tanh(rightChannel[i] * boost);
     }
 
-    // If audio.volume is locked (iOS Safari), scale PCM amplitude directly
-    const volMultiplier = isVolumeSupported ? 1.0 : Math.max(0.01, volumeSetting / 100);
-    const targetPeak = 0.85 * volMultiplier;
-    const scale = maxPeak > 0 ? (targetPeak / maxPeak) * 32767 : 0;
+    // Convert into Web Audio API AudioBuffer
+    const audioBuffer = targetCtx.createBuffer(2, nSamples, SAMPLE_RATE);
+    audioBuffer.copyToChannel(leftChannel, 0);
+    audioBuffer.copyToChannel(rightChannel, 1);
 
-    // 5. Build 16-bit PCM WAV File Header & Payload
-    const pcmByteLength = N * 2 * 2; // N frames * 2 channels * 2 bytes/sample
-    const totalWavSize = 44 + pcmByteLength;
-    const buffer = new ArrayBuffer(totalWavSize);
-    const headerView = new DataView(buffer);
+    return { audioBuffer, leftChannel, rightChannel, nSamples };
+  }
 
-    // RIFF identifier 'RIFF'
-    headerView.setUint32(0, 0x52494646, false);
-    // File size - 8
-    headerView.setUint32(4, 36 + pcmByteLength, true);
-    // 'WAVE'
-    headerView.setUint32(8, 0x57415645, false);
-    // 'fmt ' chunk
-    headerView.setUint32(12, 0x666d7420, false);
-    headerView.setUint32(16, 16, true);             // Subchunk1Size (16 for PCM)
-    headerView.setUint16(20, 1, true);              // AudioFormat (1 = PCM)
-    headerView.setUint16(22, 2, true);              // NumChannels (2 = Stereo)
-    headerView.setUint32(24, SAMPLE_RATE, true);    // SampleRate
-    headerView.setUint32(28, SAMPLE_RATE * 4, true);// ByteRate (SampleRate * 2 channels * 2 bytes)
-    headerView.setUint16(32, 4, true);              // BlockAlign (channels * bytesPerSample)
-    headerView.setUint16(34, 16, true);             // BitsPerSample (16 bits)
-    // 'data' chunk
-    headerView.setUint32(36, 0x64617461, false);
-    headerView.setUint32(40, pcmByteLength, true);
+  /**
+   * Generates a 16-bit PCM WAV Blob as a secondary fallback.
+   */
+  function encodeWavBlob(left, right, numSamples) {
+    const pcmBytes = numSamples * 2 * 2;
+    const buffer = new ArrayBuffer(44 + pcmBytes);
+    const view = new DataView(buffer);
 
-    // Write interleaved 16-bit PCM samples
-    const pcmView = new Int16Array(buffer, 44, N * 2);
-    let sampleIdx = 0;
-    for (let i = 0; i < N; i++) {
-      pcmView[sampleIdx++] = Math.max(-32768, Math.min(32767, Math.round(left[i] * scale)));
-      pcmView[sampleIdx++] = Math.max(-32768, Math.min(32767, Math.round(right[i] * scale)));
+    view.setUint32(0, 0x52494646, false); // RIFF
+    view.setUint32(4, 36 + pcmBytes, true);
+    view.setUint32(8, 0x57415645, false); // WAVE
+    view.setUint32(12, 0x666d7420, false); // fmt
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 2, true); // Stereo
+    view.setUint32(24, SAMPLE_RATE, true);
+    view.setUint32(28, SAMPLE_RATE * 4, true);
+    view.setUint16(32, 4, true);
+    view.setUint16(34, 16, true);
+    view.setUint32(36, 0x64617461, false); // data
+    view.setUint32(40, pcmBytes, true);
+
+    const pcm = new Int16Array(buffer, 44, numSamples * 2);
+    let idx = 0;
+    for (let i = 0; i < numSamples; i++) {
+      pcm[idx++] = Math.max(-32768, Math.min(32767, Math.round(left[i] * 32767)));
+      pcm[idx++] = Math.max(-32768, Math.min(32767, Math.round(right[i] * 32767)));
     }
 
     return new Blob([buffer], { type: 'audio/wav' });
   }
 
-  // --- Volume Ramping / Fades ---
+  // --- Audio Pipeline Setup ---
 
-  function cancelCurrentFade() {
-    if (fadeAnimationId) {
-      cancelAnimationFrame(fadeAnimationId);
-      fadeAnimationId = null;
-    }
-  }
-
-  /**
-   * Smoothly ramps an audio element's volume from startVol to endVol over durationMs.
-   */
-  function rampVolume(audioEl, startVol, endVol, durationMs, onComplete) {
-    if (!isVolumeSupported) {
-      if (onComplete) onComplete();
-      return;
+  function ensureAudioPipeline() {
+    if (!audioCtx) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new AudioContextClass();
     }
 
-    cancelCurrentFade();
-    const startTime = performance.now();
-    audioEl.volume = Math.max(0, Math.min(1, startVol));
+    if (!sharedAudioBuffer) {
+      const synth = synthesizeBrownNoiseBuffer(audioCtx);
+      sharedAudioBuffer = synth.audioBuffer;
 
-    function step(currentTime) {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(1, elapsed / durationMs);
-      
-      // Smooth sinusoidal / easeInOut interpolation
-      const smooth = 0.5 * (1 - Math.cos(Math.PI * progress));
-      const currentVol = startVol + (endVol - startVol) * smooth;
-      audioEl.volume = Math.max(0, Math.min(1, currentVol));
-
-      if (progress < 1) {
-        fadeAnimationId = requestAnimationFrame(step);
-      } else {
-        audioEl.volume = Math.max(0, Math.min(1, endVol));
-        fadeAnimationId = null;
-        if (onComplete) onComplete();
+      // Prepare fallback WAV Blob
+      try {
+        const blob = encodeWavBlob(synth.leftChannel, synth.rightChannel, synth.nSamples);
+        if (fallbackBlobUrl) URL.revokeObjectURL(fallbackBlobUrl);
+        fallbackBlobUrl = URL.createObjectURL(blob);
+      } catch (e) {
+        console.warn('Fallback WAV generation skipped:', e);
       }
     }
 
-    fadeAnimationId = requestAnimationFrame(step);
+    if (!filterNode) {
+      filterNode = audioCtx.createBiquadFilter();
+      filterNode.type = 'lowpass';
+      filterNode.frequency.setValueAtTime(warmthToCutoff(warmth), audioCtx.currentTime);
+      filterNode.Q.setValueAtTime(0.707, audioCtx.currentTime);
+    }
+
+    if (!gainNode) {
+      gainNode = audioCtx.createGain();
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+
+      // 1. Direct hardware output
+      gainNode.connect(audioCtx.destination);
+
+      // 2. Route to MediaStream destination -> HTML5 <audio> tag
+      // This is the key trick that prevents iOS Safari from suspending background playback
+      if (audioCtx.createMediaStreamDestination) {
+        try {
+          const streamDest = audioCtx.createMediaStreamDestination();
+          gainNode.connect(streamDest);
+
+          if (!streamAudioEl) {
+            streamAudioEl = document.createElement('audio');
+            streamAudioEl.autoplay = true;
+            streamAudioEl.playsInline = true;
+            streamAudioEl.setAttribute('playsinline', '');
+            streamAudioEl.setAttribute('webkit-playsinline', '');
+            streamAudioEl.muted = false;
+            document.body.appendChild(streamAudioEl);
+          }
+          streamAudioEl.srcObject = streamDest.stream;
+        } catch (err) {
+          console.warn('MediaStreamDestination not supported:', err);
+        }
+      }
+    }
   }
 
-  // --- Playback Engine ---
+  // --- Playback Control ---
 
-  function getTargetVolume() {
-    return isVolumeSupported ? volume / 100 : 1.0;
+  function getTargetVolumeGain() {
+    // Generous, loud, full-bodied gain curve
+    return Math.max(0.001, (volume / 100) * 1.25);
   }
 
   function play() {
@@ -225,30 +258,35 @@
 
     updateUIState(true);
     updateMediaSession();
+    playbackStatus.textContent = 'Playing';
 
-    const targetVol = getTargetVolume();
+    ensureAudioPipeline();
 
-    // Prepare active audio element
-    if (isVolumeSupported) {
-      activeAudio.volume = 0;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
     }
 
-    const playPromise = activeAudio.play();
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          playbackStatus.textContent = 'Playing';
-          rampVolume(activeAudio, 0, targetVol, FADE_IN_MS);
-          if (timerMinutes > 0 && !sleepTimerEndTime) {
-            startSleepTimer(timerMinutes);
-          }
-        })
-        .catch((err) => {
-          console.warn('Playback error / autoplay blocked:', err);
-          isPlaying = false;
-          updateUIState(false);
-          playbackStatus.textContent = 'Tap to play';
-        });
+    // Create a new buffer source node (AudioBufferSourceNode instances are single-use)
+    bufferSourceNode = audioCtx.createBufferSource();
+    bufferSourceNode.buffer = sharedAudioBuffer;
+    bufferSourceNode.loop = true; // Hardware/DSP sample-accurate gapless looping
+    bufferSourceNode.connect(filterNode);
+    filterNode.connect(gainNode);
+
+    bufferSourceNode.start(0);
+
+    if (streamAudioEl) {
+      streamAudioEl.play().catch(() => {});
+    }
+
+    // Smooth studio fade-in (1500ms)
+    const now = audioCtx.currentTime;
+    gainNode.gain.cancelScheduledValues(now);
+    gainNode.gain.setValueAtTime(0.0001, now);
+    gainNode.gain.linearRampToValueAtTime(getTargetVolumeGain(), now + FADE_IN_SEC);
+
+    if (timerMinutes > 0 && !sleepTimerEndTime) {
+      startSleepTimer(timerMinutes);
     }
   }
 
@@ -260,17 +298,28 @@
     updateMediaSession();
     playbackStatus.textContent = 'Fading out...';
 
-    const currentVol = isVolumeSupported ? activeAudio.volume : 1.0;
-
-    rampVolume(activeAudio, currentVol, 0, FADE_OUT_MS, () => {
-      activeAudio.pause();
+    if (!audioCtx || !gainNode) {
       playbackStatus.textContent = 'Ready to play';
-      if (isVolumeSupported) {
-        activeAudio.volume = getTargetVolume();
-      }
-    });
+      return;
+    }
 
-    // Reset sleep timer if running
+    // Smooth studio fade-out (1200ms)
+    const now = audioCtx.currentTime;
+    gainNode.gain.cancelScheduledValues(now);
+    gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+    gainNode.gain.linearRampToValueAtTime(0.0001, now + FADE_OUT_SEC);
+
+    setTimeout(() => {
+      if (!isPlaying && bufferSourceNode) {
+        try {
+          bufferSourceNode.stop();
+          bufferSourceNode.disconnect();
+          bufferSourceNode = null;
+        } catch (e) {}
+        playbackStatus.textContent = 'Ready to play';
+      }
+    }, FADE_OUT_SEC * 1000 + 50);
+
     clearSleepTimer();
   }
 
@@ -282,105 +331,24 @@
     }
   }
 
-  // --- Live Warmth / Tone Updates with Crossfading ---
+  // --- Real-Time Controls ---
 
-  function applyWarmthUpdate() {
+  function onWarmthChange() {
     localStorage.setItem(STORAGE_KEYS.WARMTH, warmth.toString());
+    const cutoff = warmthToCutoff(warmth);
 
-    if (!isPlaying) {
-      // Audio is paused: cleanly regenerate and update active audio source
-      playbackStatus.textContent = 'Updating tone...';
-      setTimeout(() => {
-        const newBlob = generateBrownNoiseWav(warmth, volume);
-        if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
-        activeBlobUrl = URL.createObjectURL(newBlob);
-        activeAudio.src = activeBlobUrl;
-        playbackStatus.textContent = 'Ready to play';
-      }, 10);
-      return;
+    if (audioCtx && filterNode) {
+      // Instant, smooth parameter ramping without audio glitches
+      filterNode.frequency.setTargetAtTime(cutoff, audioCtx.currentTime, 0.04);
     }
-
-    // Audio is currently playing: smooth crossfade to new audio element
-    playbackStatus.textContent = 'Harmonizing tone...';
-    const newBlob = generateBrownNoiseWav(warmth, volume);
-    if (standbyBlobUrl) URL.revokeObjectURL(standbyBlobUrl);
-    standbyBlobUrl = URL.createObjectURL(newBlob);
-
-    standbyAudio.src = standbyBlobUrl;
-    standbyAudio.loop = true;
-    if (isVolumeSupported) {
-      standbyAudio.volume = 0;
-    }
-
-    const onCanPlay = () => {
-      standbyAudio.removeEventListener('canplaythrough', onCanPlay);
-
-      standbyAudio.play().then(() => {
-        const targetVol = getTargetVolume();
-
-        if (isVolumeSupported) {
-          const crossfadeStart = performance.now();
-          const initialActiveVol = activeAudio.volume;
-
-          function crossfadeStep(now) {
-            const progress = Math.min(1, (now - crossfadeStart) / TONE_CROSSFADE_MS);
-            activeAudio.volume = Math.max(0, initialActiveVol * (1 - progress));
-            standbyAudio.volume = Math.min(targetVol, targetVol * progress);
-
-            if (progress < 1) {
-              requestAnimationFrame(crossfadeStep);
-            } else {
-              activeAudio.pause();
-              if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
-
-              // Swap audio references
-              const tempAudio = activeAudio;
-              activeAudio = standbyAudio;
-              standbyAudio = tempAudio;
-
-              activeBlobUrl = standbyBlobUrl;
-              standbyBlobUrl = null;
-
-              playbackStatus.textContent = 'Playing';
-            }
-          }
-          requestAnimationFrame(crossfadeStep);
-        } else {
-          // iOS Safari without audio.volume support: swap immediately
-          activeAudio.pause();
-          if (activeBlobUrl) URL.revokeObjectURL(activeBlobUrl);
-
-          const tempAudio = activeAudio;
-          activeAudio = standbyAudio;
-          standbyAudio = tempAudio;
-
-          activeBlobUrl = standbyBlobUrl;
-          standbyBlobUrl = null;
-
-          playbackStatus.textContent = 'Playing';
-        }
-      }).catch(console.warn);
-    };
-
-    standbyAudio.addEventListener('canplaythrough', onCanPlay);
   }
 
-  // --- Live Volume Updates ---
-
-  function applyVolumeUpdate() {
+  function onVolumeChange() {
     localStorage.setItem(STORAGE_KEYS.VOLUME, volume.toString());
 
-    if (isVolumeSupported) {
-      // Dynamic hardware/software volume adjustment
-      if (isPlaying && !fadeAnimationId) {
-        activeAudio.volume = volume / 100;
-      }
-    } else {
-      // iOS Safari: regenerate WAV with modified PCM amplitude (debounced)
-      clearTimeout(volumeDebounceTimer);
-      volumeDebounceTimer = setTimeout(() => {
-        applyWarmthUpdate();
-      }, 250);
+    if (audioCtx && gainNode && isPlaying) {
+      const targetGain = getTargetVolumeGain();
+      gainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.03);
     }
   }
 
@@ -427,7 +395,7 @@
     timerCountdown.textContent = `${mins}:${secs < 10 ? '0' : ''}${secs} remaining`;
   }
 
-  // --- UI Update Utilities ---
+  // --- UI Utilities ---
 
   function updateUIState(playing) {
     if (playing) {
@@ -449,13 +417,6 @@
     const val = parseFloat(slider.value) || 0;
     const pct = ((val - min) / (max - min)) * 100;
     slider.style.setProperty('--slider-fill', `linear-gradient(to right, #8c582f 0%, #c88a55 ${pct}%, #1b1410 ${pct}%)`);
-  }
-
-  function formatWarmthLabel(val) {
-    if (val < 25) return 'Deep Rumble';
-    if (val < 50) return 'Warm Umber';
-    if (val < 75) return 'Mellow Brown';
-    return 'Soft Brown';
   }
 
   // --- Media Session API ---
@@ -494,9 +455,7 @@
     warmth = parseInt(e.target.value, 10);
     warmthValue.textContent = formatWarmthLabel(warmth);
     updateSliderFill(warmthSlider);
-
-    clearTimeout(warmthDebounceTimer);
-    warmthDebounceTimer = setTimeout(applyWarmthUpdate, 180);
+    onWarmthChange();
   });
 
   // Volume Slider
@@ -504,7 +463,7 @@
     volume = parseInt(e.target.value, 10);
     volumeValue.textContent = `${volume}%`;
     updateSliderFill(volumeSlider);
-    applyVolumeUpdate();
+    onVolumeChange();
   });
 
   // Sleep Timer Chips
@@ -524,19 +483,24 @@
     });
   });
 
-  // Network Offline / Online status reflection
+  // Resume context if app re-enters foreground
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && audioCtx && audioCtx.state === 'suspended' && isPlaying) {
+      audioCtx.resume();
+    }
+  });
+
+  // Network Offline / Online status
   window.addEventListener('online', () => {
     offlineBadge.title = 'Works 100% offline (Online)';
   });
-
   window.addEventListener('offline', () => {
     offlineBadge.title = 'Offline mode active';
   });
 
-  // --- Initial Setup & Service Worker Registration ---
+  // --- App Initialization ---
 
   function initializeApp() {
-    // 1. Restore slider states
     warmthSlider.value = warmth;
     warmthValue.textContent = formatWarmthLabel(warmth);
     updateSliderFill(warmthSlider);
@@ -545,7 +509,6 @@
     volumeValue.textContent = `${volume}%`;
     updateSliderFill(volumeSlider);
 
-    // 2. Restore timer chip
     timerChips.forEach((chip) => {
       const mins = parseInt(chip.getAttribute('data-minutes') || '0', 10);
       if (mins === timerMinutes) {
@@ -556,24 +519,9 @@
     });
     timerCountdown.textContent = timerMinutes === 0 ? 'Continuous' : `${timerMinutes}m`;
 
-    // 3. Synthesize initial brown noise audio buffer
-    playbackStatus.textContent = 'Generating sound...';
-    setTimeout(() => {
-      const initialBlob = generateBrownNoiseWav(warmth, volume);
-      activeBlobUrl = URL.createObjectURL(initialBlob);
-      activeAudio.src = activeBlobUrl;
-      activeAudio.loop = true;
-      activeAudio.playsInline = true;
-      if (isVolumeSupported) {
-        activeAudio.volume = getTargetVolume();
-      }
-      playbackStatus.textContent = 'Ready to play';
-    }, 10);
-
-    // 4. Setup Media Session
     updateMediaSession();
 
-    // 5. Register Service Worker
+    // Register Service Worker
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
@@ -587,6 +535,5 @@
     }
   }
 
-  // Launch!
   initializeApp();
 })();

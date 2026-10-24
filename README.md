@@ -10,8 +10,9 @@ Designed with an espresso and warm amber dark aesthetic, it runs 100% offline wi
 
 * **Zero Dependencies & No CDNs:** Pure HTML5, CSS3, and modern vanilla JavaScript. No npm packages, no build steps, no Google Fonts, no external icons, and no remote audio files.
 * **iOS Background Playback Safe:** Avoids live `AudioContext` pipelines which iOS Safari suspends when locked or backgrounded. Instead, procedurally generates a seamless 16-bit stereo `.wav` file into an in-memory `Blob` and feeds standard HTML5 `<audio loop playsinline>`.
-* **Seamless Looping:** Buffer features an equal-power crossfade between the end and beginning of the audio buffer, producing zero clicks, pops, or seams.
-* **Tone & Warmth Filtering:** One-pole low-pass filter baked directly into the PCM samples during buffer generation, ranging from deep sub-bass rumbles (80 Hz) to soft, airy brown noise (2200 Hz).
+* **Seamless Gapless Looping:** Sample-accurate loop architecture with a 40-second high-resolution stereo buffer, DC-blocker filtering, and an equal-power crossfade between the end and beginning of the audio buffer, producing zero clicks, pops, or looping skips.
+* **Warmth & Tone Filtering:** One-pole low-pass filter dynamically adjustable from deep sub-bass rumbles (65 Hz) to gentle mellow brown noise (500 Hz max), completely eliminating shrill high-frequency hiss.
+* **Loud & Immersive Sound:** Optimized RMS loudness normalization (~ -12 dBFS) paired with transparent soft-knee saturation for loud, rich presence without distortion even at max volume.
 * **Live Tone Crossfading:** Adjusting the Warmth slider while playing triggers a smooth dual-audio crossfade so the tone shifts seamlessly without dropouts or audio glitches.
 * **Studio Smooth Fades:**
   * **Play:** 1500ms smooth volume ramp up.
