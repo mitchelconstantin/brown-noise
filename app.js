@@ -1,7 +1,7 @@
 /**
  * Offline-First Brown Noise PWA
  * Pure Gaussian real-time Web Audio engine with zero looping jitter,
- * instantaneous parameter response, and native Android/iOS background playback.
+ * instantaneous parameter response, and native Android/iOS lock-screen media controls.
  */
 
 (function () {
@@ -29,6 +29,7 @@
     deep: { name: 'Deep (500 Hz)', cutoff: 500, slope: 2 },
     rumble: { name: 'Rumble (250 Hz)', cutoff: 250, slope: 2 }
   };
+  const PRESET_ORDER = ['open', 'warm', 'deep', 'rumble'];
 
   // --- DOM Elements ---
   const playBtn = document.getElementById('playBtn');
@@ -84,15 +85,15 @@
   let silentBlobUrl = null;
 
   /**
-   * Generates a valid 5-second silent WAV file with actual PCM samples and duration.
-   * Android Chrome inspects audio duration to create the system notification player
-   * and grant the background audio wakelock.
+   * Generates a valid 30-second silent WAV file with actual PCM duration.
+   * Chrome for Android requires an active media element with duration > 5s
+   * to spawn the lock screen notification player and grant background audio focus.
    */
-  function createSilentWavBlobUrl() {
+  function create30sSilentWavBlobUrl() {
     if (silentBlobUrl) return silentBlobUrl;
 
     const rate = 8000;
-    const dur = 5;
+    const dur = 30; // 30 seconds
     const numSamples = rate * dur;
     const buffer = new ArrayBuffer(44 + numSamples);
     const view = new DataView(buffer);
@@ -133,7 +134,7 @@
   /**
    * Procedural Audio Synthesis:
    * Pure Gaussian brown noise with leaky integration and DC blocking.
-   * Completely linear synthesis with zero saturation clipping (silky, scratch-free).
+   * Zero saturation clipping (silky, scratch-free).
    */
   function createPureBrownNoiseBuffer(targetCtx) {
     if (cachedAudioBuffer) return cachedAudioBuffer;
@@ -220,10 +221,10 @@
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       audioCtx = new AudioContextClass();
 
-      // Guard against Android / iOS background context suspension
+      // Guard against Android background context suspension
       audioCtx.onstatechange = () => {
         if (isPlaying && audioCtx.state === 'suspended') {
-          audioCtx.resume();
+          audioCtx.resume().catch(console.warn);
         }
       };
     }
@@ -303,17 +304,19 @@
       audioCtx.resume();
     }
 
-    // Start background media element with valid silent WAV
+    // 1. Play background media element (triggers Android Chrome lock screen & notification player)
     if (bgMedia) {
-      if (!bgMedia.src || bgMedia.src.startsWith('data:audio/wav;base64,UklGRjIAAAB')) {
-        bgMedia.src = createSilentWavBlobUrl();
-      }
-      bgMedia.loop = true;
       bgMedia.volume = 1.0;
-      bgMedia.play().catch(console.warn);
+      bgMedia.loop = true;
+      const playPromise = bgMedia.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => updateMediaSession())
+          .catch((e) => console.warn('bgMedia play:', e));
+      }
     }
 
-    // Create and play sample-accurate gapless buffer source node
+    // 2. Play sample-accurate gapless buffer source node
     if (!sourceNode) {
       sourceNode = audioCtx.createBufferSource();
       sourceNode.buffer = cachedAudioBuffer;
@@ -517,6 +520,21 @@
     updateMediaSession();
   }
 
+  function cyclePreset(forward) {
+    const allKeys = [...PRESET_ORDER, ...customPresets.map((_, i) => `custom_${i}`)];
+    let curIdx = allKeys.indexOf(activePresetKey);
+    if (curIdx === -1) curIdx = 0;
+
+    let nextIdx = forward ? (curIdx + 1) % allKeys.length : (curIdx - 1 + allKeys.length) % allKeys.length;
+    const nextKey = allKeys[nextIdx];
+
+    if (nextKey.startsWith('custom_')) {
+      selectCustomPreset(parseInt(nextKey.split('_')[1], 10));
+    } else {
+      selectPreset(nextKey);
+    }
+  }
+
   // --- Custom Preset Modal ---
 
   function openSaveModal() {
@@ -628,19 +646,22 @@
       trackTitle = BUILTIN_PRESETS[activePresetKey].name;
     } else if (activePresetKey.startsWith('custom_')) {
       const idx = parseInt(activePresetKey.split('_')[1], 10);
-      if (customPresets[idx]) trackTitle = customPresets[idx].name;
+      if (customPresets[idx]) trackTitle = `★ ${customPresets[idx].name}`;
     } else {
       trackTitle = `Custom (${cutoff} Hz)`;
     }
 
-    // Android Chrome requires fully-qualified absolute URLs for artwork
-    const icon192 = new URL('./icons/icon-192.png', window.location.href).href;
-    const icon512 = new URL('./icons/icon-512.png', window.location.href).href;
+    // Android Chrome strictly requires fully-qualified absolute URLs for artwork
+    const origin = window.location.origin;
+    const pathname = window.location.pathname.replace(/\/[^/]*$/, '/');
+    const baseUrl = `${origin}${pathname}`;
+    const icon192 = new URL('icons/icon-192.png', baseUrl).href;
+    const icon512 = new URL('icons/icon-512.png', baseUrl).href;
 
     navigator.mediaSession.metadata = new MediaMetadata({
       title: `${trackTitle} - Brown Noise`,
       artist: 'Offline Ambient',
-      album: 'Pure Audio',
+      album: 'Pure Sound',
       artwork: [
         { src: icon192, sizes: '192x192', type: 'image/png' },
         { src: icon512, sizes: '512x512', type: 'image/png' }
@@ -653,6 +674,8 @@
       navigator.mediaSession.setActionHandler('play', () => play());
       navigator.mediaSession.setActionHandler('pause', () => stop());
       navigator.mediaSession.setActionHandler('stop', () => stop());
+      navigator.mediaSession.setActionHandler('nexttrack', () => cyclePreset(true));
+      navigator.mediaSession.setActionHandler('previoustrack', () => cyclePreset(false));
     } catch (e) {
       console.warn('MediaSession handler error:', e);
     }
@@ -710,7 +733,7 @@
   // Keep AudioContext resumed whenever visibility changes or state shifts
   document.addEventListener('visibilitychange', () => {
     if (isPlaying && audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume();
+      audioCtx.resume().catch(console.warn);
     }
   });
 
@@ -749,8 +772,13 @@
       saveCustomBtn.classList.remove('hidden');
     }
 
-    // Pre-create silent audio Blob URL
-    createSilentWavBlobUrl();
+    // Pre-create 30s silent audio Blob URL and load into bgMedia element
+    if (bgMedia) {
+      bgMedia.src = create30sSilentWavBlobUrl();
+      bgMedia.loop = true;
+      bgMedia.volume = 1.0;
+      bgMedia.load();
+    }
 
     // Sleep Timer
     timerChips.forEach((chip) => {
