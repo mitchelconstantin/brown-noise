@@ -76,9 +76,17 @@
         <div class="preset-section">
           <div class="control-header">
             <span class="control-title">Presets</span>
-            <span class="control-value" id="presetValue">Open (1200 Hz)</span>
+            <button class="save-custom-btn hidden" id="saveCustomBtn" title="Save current settings as a custom preset">
+              <svg class="save-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+              </svg>
+              <span>Save Custom</span>
+            </button>
           </div>
-          <div class="preset-chips" role="radiogroup" aria-label="Noise Presets">
+          <div class="preset-status-bar">
+            <span class="preset-label" id="presetValue" title="Current preset">Open (1200 Hz, 1x)</span>
+          </div>
+          <div class="preset-chips" id="presetChipsContainer" role="radiogroup" aria-label="Noise Presets">
             <button class="preset-chip active" data-preset="open" title="Open & loud (1200 Hz, 1x slope)">Open</button>
             <button class="preset-chip" data-preset="warm" title="Warm ambient (800 Hz, 1x slope)">Warm</button>
             <button class="preset-chip" data-preset="deep" title="Deep brown (500 Hz, 2x slope)">Deep</button>
@@ -155,6 +163,19 @@
     <footer class="app-footer">
       <span>Zero network requests &bull; Seamless looping &bull; Background audio</span>
     </footer>
+  </div>
+
+  <!-- Save Preset Dialog Modal -->
+  <div class="modal-backdrop hidden" id="saveModal">
+    <div class="modal-card">
+      <h3 class="modal-title">Save Custom Preset</h3>
+      <p class="modal-desc" id="modalDesc">Cutoff: 1050 Hz &bull; Slope: 1x</p>
+      <input type="text" class="modal-input" id="presetNameInput" placeholder="Preset name (e.g., Focus Mix)" maxlength="20">
+      <div class="modal-actions">
+        <button class="modal-btn btn-cancel" id="cancelModalBtn">Cancel</button>
+        <button class="modal-btn btn-save" id="confirmSaveBtn">Save</button>
+      </div>
+    </div>
   </div>
 
   <!-- Audio elements managed dynamically in app.js -->

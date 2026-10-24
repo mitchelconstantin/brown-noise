@@ -446,7 +446,7 @@ html, body {
 }
 
 /* ==========================================================================
-   Presets Selector
+   Presets Selector & Custom Saving
    ========================================================================== */
 .preset-section {
   display: flex;
@@ -454,25 +454,74 @@ html, body {
   gap: 8px;
 }
 
+.preset-status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.preset-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-accent-light);
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.preset-label:hover {
+  text-decoration: underline;
+}
+
+.save-custom-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(200, 138, 85, 0.15);
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent-light);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.save-custom-btn:hover {
+  background: var(--color-accent);
+  color: #16110e;
+}
+
+.save-icon {
+  width: 13px;
+  height: 13px;
+}
+
 .preset-chips {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .preset-chip {
+  flex: 1 1 calc(25% - 8px);
+  min-width: 68px;
   background: #1e1713;
   border: 1px solid var(--color-surface-border);
   color: var(--color-text-muted);
   border-radius: var(--radius-sm);
-  padding: 9px 4px;
-  font-size: 0.8rem;
+  padding: 8px 6px;
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   outline: none;
   text-align: center;
   transition: all var(--transition-fast);
   touch-action: manipulation;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 
 .preset-chip:hover {
@@ -486,6 +535,111 @@ html, body {
   color: #16110e;
   font-weight: 700;
   box-shadow: 0 2px 10px var(--color-accent-glow);
+}
+
+.preset-chip.custom-chip .chip-del {
+  margin-left: 2px;
+  font-size: 0.85rem;
+  opacity: 0.7;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.preset-chip.custom-chip .chip-del:hover {
+  opacity: 1;
+  color: #ff8080;
+}
+
+/* ==========================================================================
+   Modal Dialog
+   ========================================================================== */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 360px;
+  background: #241c17;
+  border: 1px solid var(--color-surface-border);
+  border-radius: var(--radius-lg);
+  padding: 22px 20px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.modal-desc {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.modal-input {
+  width: 100%;
+  background: #17110e;
+  border: 1px solid var(--color-surface-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: 0.95rem;
+  padding: 10px 12px;
+  outline: none;
+  font-family: inherit;
+}
+
+.modal-input:focus {
+  border-color: var(--color-accent);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.modal-btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all var(--transition-fast);
+}
+
+.btn-cancel {
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.btn-cancel:hover {
+  color: var(--color-text-primary);
+}
+
+.btn-save {
+  background: linear-gradient(135deg, var(--color-accent-light), var(--color-accent));
+  color: #16110e;
+  font-weight: 700;
+}
+
+.btn-save:hover {
+  filter: brightness(1.08);
 }
 
 /* ==========================================================================
