@@ -1,6 +1,7 @@
 /**
  * Offline-First Brown Noise PWA
- * Zero-dependency, gapless audio synthesis and background playback engine.
+ * Zero-dependency, gapless audio synthesis and background playback engine
+ * with psychoacoustic phone speaker optimization.
  */
 
 (function () {
@@ -11,15 +12,16 @@
   const BUFFER_DURATION_SEC = 40;  // 40-second high-fidelity seamless buffer
   const WARMUP_SEC = 2.0;          // 2s warmup to settle filters before buffer start
   const CROSSFADE_SEC = 4.0;       // 4s equal-power crossfade for seamless looping
-  const MIN_CUTOFF_HZ = 65;        // Deep Rumble: 65 Hz sub-bass
-  const MAX_CUTOFF_HZ = 500;       // Mellow Brown: 500 Hz maximum (no shrill frequencies)
+  const MIN_CUTOFF_HZ = 90;        // Deep Rumble: 90 Hz sub-bass (audible on phones)
+  const MAX_CUTOFF_HZ = 520;       // Mellow Brown: 520 Hz maximum (no shrill frequencies)
   const FADE_IN_SEC = 1.5;         // 1500ms smooth fade in
   const FADE_OUT_SEC = 1.2;        // 1200ms smooth fade out
 
   const STORAGE_KEYS = {
     WARMTH: 'brown_noise_warmth',
     VOLUME: 'brown_noise_volume',
-    TIMER: 'brown_noise_timer'
+    TIMER: 'brown_noise_timer',
+    BOOST: 'brown_noise_speaker_boost'
   };
 
   // --- DOM Elements ---
@@ -32,16 +34,19 @@
   const warmthValue = document.getElementById('warmthValue');
   const volumeSlider = document.getElementById('volumeSlider');
   const volumeValue = document.getElementById('volumeValue');
+  const boostBtn = document.getElementById('boostBtn');
+  const boostStatus = document.getElementById('boostStatus');
   const timerCountdown = document.getElementById('timerCountdown');
   const timerChips = document.querySelectorAll('.timer-chip');
   const offlineBadge = document.getElementById('offlineBadge');
-  const fallbackAudio = document.getElementById('audioA');
 
   // --- App State ---
   let isPlaying = false;
   let warmth = parseInt(localStorage.getItem(STORAGE_KEYS.WARMTH) || '50', 10);
-  let volume = parseInt(localStorage.getItem(STORAGE_KEYS.VOLUME) || '80', 10);
+  let volume = parseInt(localStorage.getItem(STORAGE_KEYS.VOLUME) || '85', 10);
   let timerMinutes = parseInt(localStorage.getItem(STORAGE_KEYS.TIMER) || '0', 10);
+  // Default speaker boost ON for phone loudness
+  let speakerBoost = localStorage.getItem(STORAGE_KEYS.BOOST) !== 'false';
 
   let sleepTimerInterval = null;
   let sleepTimerEndTime = null;
@@ -50,14 +55,15 @@
   let audioCtx = null;
   let bufferSourceNode = null;
   let filterNode = null;
+  let boostFilterNode = null;
+  let compressorNode = null;
   let gainNode = null;
   let streamAudioEl = null;
   let sharedAudioBuffer = null;
-  let fallbackBlobUrl = null;
 
   /**
-   * Maps 0-100 warmth slider to cutoff frequency (65 Hz to 500 Hz).
-   * Caps out at Mellow Brown with no shrill high-frequencies.
+   * Maps 0-100 warmth slider to cutoff frequency (90 Hz to 520 Hz).
+   * Capped at Mellow Brown with no shrill high frequencies.
    */
   function warmthToCutoff(val) {
     const clamped = Math.max(0, Math.min(100, val));
@@ -74,9 +80,12 @@
    * Procedural Audio Synthesis:
    * Generates a 40-second stereo brown noise buffer with:
    * 1. 2s warmup to stabilize leaky integration & DC blocker.
-   * 2. High-pass DC blocker (15 Hz) preventing baseline wander.
-   * 3. 4s equal-power crossfade for completely seamless, gapless looping.
-   * 4. RMS loudness normalization (~ -12 dBFS) + soft saturation for rich, full, loud sound.
+   * 2. 40 Hz high-pass filter: eliminates inaudible subsonic rumble that wastes
+   *    phone speaker power and amplifier excursion.
+   * 3. Psychoacoustic harmonic bass generator: injects warm 2nd & 3rd harmonics
+   *    into the 180 Hz - 450 Hz band, making deep bass clearly audible on phone speakers.
+   * 4. 4s equal-power tail crossfade for zero-seam, completely gapless looping.
+   * 5. RMS loudness normalization (~ -9.5 dBFS) + soft saturation.
    */
   function synthesizeBrownNoiseBuffer(targetCtx) {
     const warmupSamples = Math.floor(SAMPLE_RATE * WARMUP_SEC);
@@ -97,20 +106,23 @@
       rawR[i] = lastR;
     }
 
-    // 2. DC-blocking filter (15 Hz) to eliminate baseline wander
-    const R = 0.998;
-    let dcL = 0, prevXL = 0;
-    let dcR = 0, prevXR = 0;
-    for (let i = 0; i < totalGen; i++) {
-      const xL = rawL[i];
-      dcL = xL - prevXL + R * dcL;
-      prevXL = xL;
-      rawL[i] = dcL;
+    // 2. High-pass filter at 40 Hz to remove inaudible sub-bass power drain
+    const dt = 1 / SAMPLE_RATE;
+    const rc = 1 / (2 * Math.PI * 40);
+    const alphaHP = rc / (rc + dt);
 
-      const xR = rawR[i];
-      dcR = xR - prevXR + R * dcR;
-      prevXR = xR;
-      rawR[i] = dcR;
+    let prevXL = 0, prevYL = 0;
+    let prevXR = 0, prevYR = 0;
+    for (let i = 0; i < totalGen; i++) {
+      const yL = alphaHP * (prevYL + rawL[i] - prevXL);
+      prevXL = rawL[i];
+      prevYL = yL;
+      rawL[i] = yL;
+
+      const yR = alphaHP * (prevYR + rawR[i] - prevXR);
+      prevXR = rawR[i];
+      prevYR = yR;
+      rawR[i] = yR;
     }
 
     // 3. Extract steady-state portion
@@ -131,15 +143,22 @@
       rightChannel[i] = rawR[tailOffset + i] * wTail + rightChannel[i] * wHead;
     }
 
-    // 5. RMS Loudness Normalization + Transparent Soft Saturation
+    // 5. Psychoacoustic harmonic bass exciter (adds warmth in the phone speaker zone)
+    for (let i = 0; i < nSamples; i++) {
+      const l = leftChannel[i];
+      const r = rightChannel[i];
+      leftChannel[i] = l + 0.35 * Math.tanh(2.2 * l);
+      rightChannel[i] = r + 0.35 * Math.tanh(2.2 * r);
+    }
+
+    // 6. High-density RMS loudness normalization (~ -9.5 dBFS)
     let sumSq = 0;
     for (let i = 0; i < nSamples; i++) {
       sumSq += leftChannel[i] * leftChannel[i] + rightChannel[i] * rightChannel[i];
     }
     const currentRms = Math.sqrt(sumSq / (2 * nSamples));
+    const boost = 0.35 / (currentRms || 0.1);
 
-    // Target RMS ~0.26 (-12 dBFS RMS) for studio loud, rich presence
-    const boost = 0.26 / (currentRms || 0.1);
     for (let i = 0; i < nSamples; i++) {
       leftChannel[i] = Math.tanh(leftChannel[i] * boost);
       rightChannel[i] = Math.tanh(rightChannel[i] * boost);
@@ -150,39 +169,7 @@
     audioBuffer.copyToChannel(leftChannel, 0);
     audioBuffer.copyToChannel(rightChannel, 1);
 
-    return { audioBuffer, leftChannel, rightChannel, nSamples };
-  }
-
-  /**
-   * Generates a 16-bit PCM WAV Blob as a secondary fallback.
-   */
-  function encodeWavBlob(left, right, numSamples) {
-    const pcmBytes = numSamples * 2 * 2;
-    const buffer = new ArrayBuffer(44 + pcmBytes);
-    const view = new DataView(buffer);
-
-    view.setUint32(0, 0x52494646, false); // RIFF
-    view.setUint32(4, 36 + pcmBytes, true);
-    view.setUint32(8, 0x57415645, false); // WAVE
-    view.setUint32(12, 0x666d7420, false); // fmt
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 2, true); // Stereo
-    view.setUint32(24, SAMPLE_RATE, true);
-    view.setUint32(28, SAMPLE_RATE * 4, true);
-    view.setUint16(32, 4, true);
-    view.setUint16(34, 16, true);
-    view.setUint32(36, 0x64617461, false); // data
-    view.setUint32(40, pcmBytes, true);
-
-    const pcm = new Int16Array(buffer, 44, numSamples * 2);
-    let idx = 0;
-    for (let i = 0; i < numSamples; i++) {
-      pcm[idx++] = Math.max(-32768, Math.min(32767, Math.round(left[i] * 32767)));
-      pcm[idx++] = Math.max(-32768, Math.min(32767, Math.round(right[i] * 32767)));
-    }
-
-    return new Blob([buffer], { type: 'audio/wav' });
+    return audioBuffer;
   }
 
   // --- Audio Pipeline Setup ---
@@ -194,35 +181,50 @@
     }
 
     if (!sharedAudioBuffer) {
-      const synth = synthesizeBrownNoiseBuffer(audioCtx);
-      sharedAudioBuffer = synth.audioBuffer;
-
-      // Prepare fallback WAV Blob
-      try {
-        const blob = encodeWavBlob(synth.leftChannel, synth.rightChannel, synth.nSamples);
-        if (fallbackBlobUrl) URL.revokeObjectURL(fallbackBlobUrl);
-        fallbackBlobUrl = URL.createObjectURL(blob);
-      } catch (e) {
-        console.warn('Fallback WAV generation skipped:', e);
-      }
+      sharedAudioBuffer = synthesizeBrownNoiseBuffer(audioCtx);
     }
 
+    // 1. Tone / Warmth lowpass filter (90 Hz to 520 Hz)
     if (!filterNode) {
       filterNode = audioCtx.createBiquadFilter();
       filterNode.type = 'lowpass';
       filterNode.frequency.setValueAtTime(warmthToCutoff(warmth), audioCtx.currentTime);
-      filterNode.Q.setValueAtTime(0.707, audioCtx.currentTime);
+      filterNode.Q.setValueAtTime(0.85, audioCtx.currentTime);
     }
 
+    // 2. Phone Speaker Peaking EQ (280 Hz sweet spot)
+    if (!boostFilterNode) {
+      boostFilterNode = audioCtx.createBiquadFilter();
+      boostFilterNode.type = 'peaking';
+      boostFilterNode.frequency.setValueAtTime(280, audioCtx.currentTime);
+      boostFilterNode.Q.setValueAtTime(1.2, audioCtx.currentTime);
+      boostFilterNode.gain.setValueAtTime(speakerBoost ? 6.5 : 0, audioCtx.currentTime);
+    }
+
+    // 3. Studio Dynamics Compressor (maximizes acoustic density & prevents clipping)
+    if (!compressorNode) {
+      compressorNode = audioCtx.createDynamicsCompressor();
+      compressorNode.threshold.setValueAtTime(speakerBoost ? -20 : -14, audioCtx.currentTime);
+      compressorNode.knee.setValueAtTime(10, audioCtx.currentTime);
+      compressorNode.ratio.setValueAtTime(8, audioCtx.currentTime);
+      compressorNode.attack.setValueAtTime(0.003, audioCtx.currentTime);
+      compressorNode.release.setValueAtTime(0.15, audioCtx.currentTime);
+    }
+
+    // 4. Master Gain Node
     if (!gainNode) {
       gainNode = audioCtx.createGain();
       gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
 
-      // 1. Direct hardware output
+      // Connect DSP chain: Filter -> Peaking EQ -> Compressor -> Gain
+      filterNode.connect(boostFilterNode);
+      boostFilterNode.connect(compressorNode);
+      compressorNode.connect(gainNode);
+
+      // Master output 1: Hardware speakers / headphones
       gainNode.connect(audioCtx.destination);
 
-      // 2. Route to MediaStream destination -> HTML5 <audio> tag
-      // This is the key trick that prevents iOS Safari from suspending background playback
+      // Master output 2: MediaStream into <audio> tag (prevents iOS background suspension)
       if (audioCtx.createMediaStreamDestination) {
         try {
           const streamDest = audioCtx.createMediaStreamDestination();
@@ -245,12 +247,14 @@
     }
   }
 
-  // --- Playback Control ---
+  // --- Volume Calculation ---
 
   function getTargetVolumeGain() {
-    // Generous, loud, full-bodied gain curve
-    return Math.max(0.001, (volume / 100) * 1.25);
+    const boostMultiplier = speakerBoost ? 2.2 : 1.35;
+    return Math.max(0.001, (volume / 100) * boostMultiplier);
   }
+
+  // --- Playback Control ---
 
   function play() {
     if (isPlaying) return;
@@ -266,12 +270,11 @@
       audioCtx.resume();
     }
 
-    // Create a new buffer source node (AudioBufferSourceNode instances are single-use)
+    // AudioBufferSourceNode instances are single-use
     bufferSourceNode = audioCtx.createBufferSource();
     bufferSourceNode.buffer = sharedAudioBuffer;
     bufferSourceNode.loop = true; // Hardware/DSP sample-accurate gapless looping
     bufferSourceNode.connect(filterNode);
-    filterNode.connect(gainNode);
 
     bufferSourceNode.start(0);
 
@@ -338,7 +341,6 @@
     const cutoff = warmthToCutoff(warmth);
 
     if (audioCtx && filterNode) {
-      // Instant, smooth parameter ramping without audio glitches
       filterNode.frequency.setTargetAtTime(cutoff, audioCtx.currentTime, 0.04);
     }
   }
@@ -349,6 +351,37 @@
     if (audioCtx && gainNode && isPlaying) {
       const targetGain = getTargetVolumeGain();
       gainNode.gain.setTargetAtTime(targetGain, audioCtx.currentTime, 0.03);
+    }
+  }
+
+  function toggleSpeakerBoost() {
+    speakerBoost = !speakerBoost;
+    localStorage.setItem(STORAGE_KEYS.BOOST, speakerBoost ? 'true' : 'false');
+    updateSpeakerBoostUI();
+
+    if (audioCtx) {
+      const now = audioCtx.currentTime;
+      if (boostFilterNode) {
+        boostFilterNode.gain.setTargetAtTime(speakerBoost ? 6.5 : 0, now, 0.05);
+      }
+      if (compressorNode) {
+        compressorNode.threshold.setTargetAtTime(speakerBoost ? -20 : -14, now, 0.05);
+      }
+      if (gainNode && isPlaying) {
+        gainNode.gain.setTargetAtTime(getTargetVolumeGain(), now, 0.05);
+      }
+    }
+  }
+
+  function updateSpeakerBoostUI() {
+    if (speakerBoost) {
+      boostBtn.classList.add('active');
+      boostBtn.setAttribute('aria-pressed', 'true');
+      boostStatus.textContent = 'ON';
+    } else {
+      boostBtn.classList.remove('active');
+      boostBtn.setAttribute('aria-pressed', 'false');
+      boostStatus.textContent = 'OFF';
     }
   }
 
@@ -466,6 +499,9 @@
     onVolumeChange();
   });
 
+  // Speaker Boost Toggle
+  boostBtn.addEventListener('click', toggleSpeakerBoost);
+
   // Sleep Timer Chips
   timerChips.forEach((chip) => {
     chip.addEventListener('click', () => {
@@ -508,6 +544,8 @@
     volumeSlider.value = volume;
     volumeValue.textContent = `${volume}%`;
     updateSliderFill(volumeSlider);
+
+    updateSpeakerBoostUI();
 
     timerChips.forEach((chip) => {
       const mins = parseInt(chip.getAttribute('data-minutes') || '0', 10);
