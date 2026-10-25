@@ -218,14 +218,26 @@
 
   // --- Real-time Audio Graph Setup ---
 
+  function setAudioSessionPlayback() {
+    if ('audioSession' in navigator) {
+      try {
+        navigator.audioSession.type = 'playback';
+      } catch (e) {
+        console.warn('audioSession type error:', e);
+      }
+    }
+  }
+
   function ensureAudioPipeline() {
+    setAudioSessionPlayback();
+
     if (!audioCtx) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       audioCtx = new AudioContextClass();
 
-      // Guard against Android background context suspension
+      // Guard against iOS/Android background context suspension and interruptions
       audioCtx.onstatechange = () => {
-        if (isPlaying && audioCtx.state === 'suspended') {
+        if (isPlaying && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
           audioCtx.resume().catch(console.warn);
         }
       };
@@ -300,16 +312,17 @@
     updateUIState(true);
     playbackStatus.textContent = 'Playing';
 
+    setAudioSessionPlayback();
     ensureAudioPipeline();
 
-    if (audioCtx.state === 'suspended') {
-      audioCtx.resume();
+    if (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted') {
+      audioCtx.resume().catch(console.warn);
     }
 
-    // 1. Play background media element (triggers Android Chrome lock screen & notification player)
-    // Volume set to 0.0001 with 16-bit zero PCM so it is 100% silent with zero clicks/ticks
+    // 1. Play background media element with volume 1.0 (audible to iOS audio session manager,
+    // 16-bit zero PCM so it is 100% silent, keeping OS audio session open indefinitely)
     if (bgMedia) {
-      bgMedia.volume = 0.0001;
+      bgMedia.volume = 1.0;
       bgMedia.loop = true;
       const playPromise = bgMedia.play();
       if (playPromise !== undefined) {
@@ -674,7 +687,13 @@
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
 
     try {
-      navigator.mediaSession.setActionHandler('play', () => play());
+      navigator.mediaSession.setActionHandler('play', () => {
+        setAudioSessionPlayback();
+        if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
+          audioCtx.resume().catch(console.warn);
+        }
+        play();
+      });
       navigator.mediaSession.setActionHandler('pause', () => stop());
       navigator.mediaSession.setActionHandler('stop', () => stop());
       navigator.mediaSession.setActionHandler('nexttrack', () => cyclePreset(true));
@@ -733,10 +752,16 @@
     });
   });
 
-  // Keep AudioContext resumed whenever visibility changes or state shifts
+  // Keep AudioContext resumed whenever visibility changes or phone is locked/unlocked
   document.addEventListener('visibilitychange', () => {
-    if (isPlaying && audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume().catch(console.warn);
+    if (isPlaying) {
+      setAudioSessionPlayback();
+      if (audioCtx && (audioCtx.state === 'suspended' || audioCtx.state === 'interrupted')) {
+        audioCtx.resume().catch(console.warn);
+      }
+      if (bgMedia && bgMedia.paused) {
+        bgMedia.play().catch(console.warn);
+      }
     }
   });
 
@@ -751,6 +776,8 @@
   // --- App Initialization ---
 
   function initializeApp() {
+    setAudioSessionPlayback();
+
     cutoffSlider.value = cutoff;
     cutoffValue.textContent = `${cutoff} Hz`;
     updateSliderFill(cutoffSlider);
@@ -779,7 +806,7 @@
     if (bgMedia) {
       bgMedia.src = create30sSilentWavBlobUrl();
       bgMedia.loop = true;
-      bgMedia.volume = 0.0001; // Inaudible, zero DC offset
+      bgMedia.volume = 1.0; // Unmuted / full volume keeps iOS WebKit background session active
       bgMedia.load();
     }
 
